@@ -48,7 +48,11 @@ def create_rag_chain(vectordb, llm):
     retriever = vectordb.as_retriever(search_kwargs={"k": 3})
     
     # Define the prompt template
-    template = """You are a helpful research assistant. Use the following context from a research paper to answer the question. If the answer is in the context, provide a detailed response. If not explicitly stated but related information exists, provide what you can infer from the context.
+    template = """You are a helpful research assistant. 
+    Use the following context from a research paper to answer the question. 
+    If the answer is in the context, provide a detailed response. 
+    If not explicitly stated but related information exists, 
+    provide what you can infer from the context.
 
 Context:
 {context}
