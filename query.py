@@ -1,5 +1,8 @@
 # query_simple.py - Simple RAG query (no agent yet)
 
+import warnings
+warnings.filterwarnings("ignore")
+
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -15,7 +18,7 @@ GOOGLE_API_KEY = "AIzaSyA4bQVXAOIJONzLLBQYBwVRmFI81Qj6pUM"
 # 1. LOAD EXISTING VECTOR DB
 def load_vectordb():
     """Load the Chroma vector database we created"""
-    print("Loading vector database...")
+    # print("Loading vector database...")
     embeddings = OllamaEmbeddings(
         model="nomic-embed-text:latest",
         base_url="http://localhost:11434"
@@ -26,14 +29,14 @@ def load_vectordb():
         embedding_function=embeddings,
         collection_name=COLLECTION_NAME
     )
-    print(f"✓ Loaded collection '{COLLECTION_NAME}'")
+    # print(f"✓ Loaded collection '{COLLECTION_NAME}'")
     return vectordb
 
 # 2. SETUP LLM
 def get_llm():
     """Initialize Google Gemini LLM"""
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=0.3
     )
@@ -72,8 +75,8 @@ Answer:"""
 # 4. ASK QUESTIONS
 def ask_question(rag_chain, retriever, question):
     """Query the RAG system"""
-    print(f"\nQuestion: {question}")
-    print("Searching and generating answer...\n")
+    # print(f"\nQuestion: {question}")
+    # print("Searching and generating answer...\n")
     
     # Get the answer from the chain
     answer = rag_chain.invoke(question)
@@ -82,7 +85,7 @@ def ask_question(rag_chain, retriever, question):
     sources = retriever.invoke(question)
     
     print(f"Answer: {answer}\n")
-    print(f"Sources: {len(sources)} document chunks used")
+    # print(f"Sources: {len(sources)} document chunks used")
     return answer
 
 def main():
@@ -93,7 +96,6 @@ def main():
     llm = get_llm()
     rag_chain, retriever = create_rag_chain(vectordb, llm)
     
-    print("\n✓ System ready! You can now ask questions about the document.")
     print("(Type 'exit' or 'quit' to stop)\n")
     
     # Interactive query loop
