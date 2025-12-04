@@ -1,6 +1,9 @@
 # ingest.py - Document ingestion script
 
 # 1. IMPORTS 
+import warnings
+warnings.filterwarnings("ignore")
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OllamaEmbeddings
