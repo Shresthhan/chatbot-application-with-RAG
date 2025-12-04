@@ -1,19 +1,21 @@
 # ingest.py - Document ingestion script
 
-# 1. IMPORTS - Libraries we need
+# 1. IMPORTS 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
+import shutil
+import os
 
-# 2. CONFIGURATION - Same settings as your LangFlow
+# 2. CONFIGURATION 
 PDF_PATH = "data/Conference_paper_pdf .pdf"
 CHROMA_PATH = "./Vector_DB"
 COLLECTION_NAME = "my_docss"
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 2000
+CHUNK_OVERLAP = 400
 
-# 3. LOAD DOCUMENT (replaces File component)
+# 3. LOAD DOCUMENT 
 def load_document(file_path):
     """Load PDF file and extract text"""
     print(f"Loading document from {file_path}...")
@@ -22,7 +24,7 @@ def load_document(file_path):
     print(f"Loaded {len(documents)} pages")
     return documents
 
-# 4. SPLIT TEXT (replaces Recursive Text Splitter component)
+# 4. SPLIT TEXT 
 def split_documents(documents):
     """Split documents into chunks"""
     print("Splitting document into chunks...")
@@ -34,7 +36,7 @@ def split_documents(documents):
     print(f"Created {len(chunks)} chunks")
     return chunks
 
-# 5. CREATE EMBEDDINGS (replaces Ollama Embeddings component)
+# 5. CREATE EMBEDDINGS 
 def get_embeddings():
     """Initialize Ollama embeddings"""
     print("Initializing Ollama embeddings...")
@@ -44,7 +46,7 @@ def get_embeddings():
     )
     return embeddings
 
-# 6. STORE IN VECTOR DB (replaces Chroma DB component)
+# 6. STORE IN VECTOR DB 
 def store_in_vectordb(chunks, embeddings):
     """Store chunks in Chroma vector database"""
     print(f"Storing chunks in Chroma at {CHROMA_PATH}...")
@@ -57,10 +59,16 @@ def store_in_vectordb(chunks, embeddings):
     print("✓ Documents stored successfully!")
     return vectordb
 
-# 7. MAIN FUNCTION - Orchestrates everything
+# 7. MAIN FUNCTION 
 def main():
     """Run the complete ingestion pipeline"""
     print("=== Starting Document Ingestion ===\n")
+    
+    # Clear existing vector database if it exists
+    if os.path.exists(CHROMA_PATH):
+        print(f"Removing existing vector database at {CHROMA_PATH}...")
+        shutil.rmtree(CHROMA_PATH)
+        print("✓ Old database cleared\n")
     
     # Step by step execution
     documents = load_document(PDF_PATH)
