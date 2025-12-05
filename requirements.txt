@@ -1,6 +1,7 @@
 langchain>=0.3.0
 chromadb>=0.4.24
 langchain-community>=0.3.0
+langchain-experimental
 langchain-google-genai
 langchain-text-splitters
 pypdf
