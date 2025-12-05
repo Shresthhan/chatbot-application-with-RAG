@@ -1,0 +1,6 @@
+# Ignore environment variables and virtual environment
+.env
+.venv/
+Vector_DB/
+__pycache__/
+*.pyc

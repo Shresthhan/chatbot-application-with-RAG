@@ -3,6 +3,9 @@
 import warnings
 warnings.filterwarnings("ignore")
 
+import os
+from dotenv import load_dotenv
+
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -10,10 +13,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
+# Load environment variables
+load_dotenv()
+
 # Configuration (same as ingestion)
 CHROMA_PATH = "./Vector_DB"
 COLLECTION_NAME = "my_docss"
-GOOGLE_API_KEY = "AIzaSyA4bQVXAOIJONzLLBQYBwVRmFI81Qj6pUM"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # 1. LOAD EXISTING VECTOR DB
 def load_vectordb():
