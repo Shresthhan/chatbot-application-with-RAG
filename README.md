@@ -133,8 +133,18 @@ chatbot-application-with-RAG/
 ```
 
 ## 🏗️ Architecture
+### System Architecture
+<img src="images/chat-RAG-mermaid-diagram.png" width="500">
 
-![System Architecture](images/chat-RAG-mermaid-diagram.png)
+![System Architecture]()
+
+### User Interface 
+<img src="images/UI.png" width="500">
+
+### Ingestion
+<img src="images/Ingestion.png" width="200">
+
+
 
 ## 🔧 Technology Stack
 
