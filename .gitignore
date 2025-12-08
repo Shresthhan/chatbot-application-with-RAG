@@ -2,5 +2,6 @@
 .env
 .venv/
 Vector_DB/
+data/
 __pycache__/
 *.pyc

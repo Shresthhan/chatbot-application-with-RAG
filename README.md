@@ -32,6 +32,9 @@ A powerful Retrieval-Augmented Generation (RAG) chatbot with **multi-collection 
 - List all collections with statistics
 - Collection-specific querying
 - Selective collection deletion
+- **Background ingestion** with job tracking
+- Chunking strategy selector (semantic/fixed)
+- Real-time ingestion status updates
 
 ## 🚀 Quick Start
 
@@ -83,9 +86,11 @@ UI will open at http://localhost:8501
 #### Step 3: Create Collections & Upload Documents
 1. Go to **Ingestion** tab
 2. Enter a collection name (e.g., "research_papers")
-3. Upload PDF file
-4. Click **Ingest Document**
-5. Wait 2-5 minutes for processing
+3. Choose chunking strategy (Semantic or Fixed-size)
+4. Upload PDF file
+5. Click **Ingest Document**
+6. Ingestion runs in background - track status in UI
+7. Wait 2-5 minutes for processing to complete
 
 #### Step 4: Query Your Documents
 1. Select collection from dropdown
@@ -114,7 +119,8 @@ ChromaDB Vector Database
 | **LLM** | Google Gemini 2.5-Flash |
 | **Embeddings** | HuggingFace (all-mpnet-base-v2) |
 | **Vector DB** | ChromaDB |
-| **Chunking** | SemanticChunker (LangChain) |
+| **Chunking** | SemanticChunker + RecursiveCharacterTextSplitter |
+| **Job Tracking** | SQLAlchemy + SQLite |
 
 ## 🎯 Use Cases
 
@@ -151,12 +157,27 @@ Query a specific collection
 ```
 
 ### POST /ingest
-Ingest PDF to collection
+Ingest PDF to collection (background processing)
 ```
 Form Data:
 - file: PDF file
 - collection_name: "my_collection"
+- chunking_strategy: "semantic" or "fixed"
+Returns: {"ingestion_id": "uuid", "message": "..."}
 ```
+
+### GET /status/{ingestion_id}
+Check ingestion job status
+```json
+Response: {
+  "status": "PROCESSING",
+  "progress": 45.5,
+  "message": "Processing document..."
+}
+```
+
+### GET /ingestions
+List recent ingestion jobs with status
 
 ### DELETE /database
 Delete entire database or specific collection
@@ -173,4 +194,52 @@ Query Parameter:
 - **Document Upload** - Drag-and-drop PDF ingestion
 - **Collection Info** - Display chunk counts per collection
 - **Session Management** - Create, switch, delete chat sessions
+
+## 🛠️ Troubleshooting
+
+### API Not Responding
+- **Issue**: Streamlit shows connection errors
+- **Solution**: Ensure FastAPI is running on http://localhost:8000
+- **Check**: Run `curl http://localhost:8000/health` or visit in browser
+
+### Collection Name Validation Error
+- **Issue**: "Invalid collection name" error
+- **Solution**: Use only alphanumeric characters, dots, underscores, hyphens
+- **Valid**: `research_papers`, `my-docs`, `collection.v1`
+- **Invalid**: `my docs` (space), `report ` (trailing space)
+
+### Ingestion Fails with 500 Error
+- **Issue**: Ingestion returns server error
+- **Solution**: 
+  - Check API logs for detailed error
+  - Ensure PDF is valid and not corrupted
+  - Verify collection name is properly formatted
+  - Restart API if needed
+
+### Empty Collections Appearing
+- **Issue**: Default collection shows with 0 chunks
+- **Solution**: This is fixed in latest version - only collections with documents are loaded
+
+### Background Ingestion Stuck
+- **Issue**: Ingestion status stays at "PROCESSING"
+- **Solution**:
+  - Check `/ingestions` endpoint for error details
+  - Large PDFs may take 5-10 minutes
+  - Restart API if truly stuck
+
+## 📝 Collection Naming Rules
+
+Collection names must:
+- Be at least 3 characters long
+- Start and end with alphanumeric characters
+- Contain only: letters, numbers, dots (.), underscores (_), hyphens (-)
+- **No spaces or trailing whitespace**
+
+Examples:
+✅ `research_papers_2024`
+✅ `my-collection.v2`
+✅ `project_alpha`
+❌ `my collection` (space)
+❌ `report ` (trailing space)
+❌ `ab` (too short)
 
