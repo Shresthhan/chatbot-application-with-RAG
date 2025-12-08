@@ -134,7 +134,7 @@ chatbot-application-with-RAG/
 
 ## 🏗️ Architecture
 
-![System Architecture](images/chat-RAG-mermaid-diagram.png.png)
+![System Architecture](images/chat-RAG-mermaid-diagram.png)
 
 ## 🔧 Technology Stack
 
