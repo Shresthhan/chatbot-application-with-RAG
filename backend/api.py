@@ -310,13 +310,6 @@ async def ingest_pdf(
     chunking_strategy: str = Form("semantic", description="semantic or fixed"),
     db: Session = Depends(get_db)
 ):
-    """
-    CHANGED BEHAVIOR:
-    OLD: User uploads → waits 5 minutes → gets result
-    NEW: User uploads → gets ingestion_id in 1 second → background task continues
-    
-    This makes the API non-blocking. User gets ticket number and can leave.
-    """
     
     # Step 1: Clean the input (remove extra spaces)
     collection_name = collection_name.strip()

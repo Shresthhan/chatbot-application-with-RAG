@@ -134,16 +134,7 @@ chatbot-application-with-RAG/
 
 ## 🏗️ Architecture
 
-```
-Streamlit UI (frontend/app_api.py)
-    ↓ REST API calls
-FastAPI Backend (backend/api.py)
-    ↓ Collection-specific queries
-ChromaDB Vector Database (Vector_DB/)
-    ├── Collection: my_docss
-    ├── Collection: research_papers
-    └── Collection: technical_docs
-```
+![System Architecture](images/chat-RAG-mermaid-diagram.png.png)
 
 ## 🔧 Technology Stack
 
