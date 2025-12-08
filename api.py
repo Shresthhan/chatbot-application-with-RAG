@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any
 from sqlalchemy.orm import Session
 import tempfile
 import os
+import re
 import shutil
 import uuid
 from datetime import datetime
@@ -131,13 +132,27 @@ async def startup_event():
     # NEW: Initialize database first
     init_db()
     
-    # Existing: Initialize RAG system
+    # Check if Vector_DB exists and has actual collections with documents
     if os.path.exists("./Vector_DB"):
         try:
-            initialize_rag_system("my_docss")
-            print("✓ RAG system initialized with default collection")
-        except:
-            print("⚠ Could not load default collection")
+            import chromadb
+            client = chromadb.PersistentClient(path="./Vector_DB")
+            collections = client.list_collections()
+            
+            # Only initialize if there are collections with documents
+            if collections:
+                for col in collections:
+                    if col.count() > 0:  # Only load collections with documents
+                        try:
+                            initialize_rag_system(col.name)
+                            print(f"✓ RAG system initialized with collection: {col.name}")
+                        except Exception as e:
+                            print(f"⚠ Could not load collection {col.name}: {e}")
+                        break  # Load first non-empty collection
+            else:
+                print("⚠ No collections found. Upload documents first.")
+        except Exception as e:
+            print(f"⚠ Could not initialize RAG system: {e}")
     else:
         print("⚠ No vector database found. Upload documents first.")
 
@@ -238,6 +253,9 @@ def process_ingestion_background(
         )
         
         # THE SLOW PART (2-5 minutes) - but user already got their response!
+        # Strip whitespace to ensure ChromaDB compatibility
+        collection_name = collection_name.strip()
+        
         vectordb_result, num_chunks = ingest_document_to_collection(
             file_path=file_path,
             collection_name=collection_name,
@@ -283,13 +301,14 @@ def process_ingestion_background(
 
 
 # Ingest endpoint
-@app.post("/ingest", response_model=IngestStartResponse)  # Changed response model
+# Ingest endpoint
+@app.post("/ingest", response_model=IngestStartResponse)
 async def ingest_pdf(
-    background_tasks: BackgroundTasks,  # NEW parameter - FastAPI magic
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="PDF file to ingest"),
     collection_name: str = Form(..., description="Name of the collection"),
     chunking_strategy: str = Form("semantic", description="semantic or fixed"),
-    db: Session = Depends(get_db)  # NEW parameter - database connection
+    db: Session = Depends(get_db)
 ):
     """
     CHANGED BEHAVIOR:
@@ -299,51 +318,74 @@ async def ingest_pdf(
     This makes the API non-blocking. User gets ticket number and can leave.
     """
     
-    # Validate file type (same as before)
+    # Step 1: Clean the input (remove extra spaces)
+    collection_name = collection_name.strip()
+    
+    # Step 2: Validate length
+    if len(collection_name) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Collection name must be at least 3 characters long"
+        )
+    
+    if len(collection_name) > 512:
+        raise HTTPException(
+            status_code=400,
+            detail="Collection name must be less than 512 characters"
+        )
+    
+    # Step 3: Validate format (must start/end with letter or number)
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$', collection_name):
+        raise HTTPException(
+            status_code=400,
+            detail="Collection name must start and end with a letter or number, "
+                   "and can only contain letters, numbers, dots (.), underscores (_), or hyphens (-)"
+        )
+    # ========== END VALIDATION BLOCK ==========
+    
+    # Validate file type (EXISTING CODE - DON'T CHANGE)
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
-    # Validate chunking strategy (same as before)
+    # Validate chunking strategy (EXISTING CODE - DON'T CHANGE)
     if chunking_strategy not in ["semantic", "fixed"]:
         raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
     
     # NEW: Generate unique ingestion ID
     ingestion_id = str(uuid.uuid4())
     
-    # Create temp file (same as before)
+    # Create temp file to save upload
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     temp_path = temp_file.name
     temp_file.close()
     
     try:
-        # Save uploaded file (same as before)
+        # Save uploaded file to temp path
         with open(temp_path, "wb") as f:
             content = await file.read()
             f.write(content)
         
-        # NEW: Create job record in DATABASE
+        # Create database record for tracking
         create_ingestion_job(
             db,
             ingestion_id=ingestion_id,
-            status=IngestionStatus.PENDING,
-            message="Ingestion queued",
-            progress=0,
             collection_name=collection_name,
             chunking_strategy=chunking_strategy,
-            original_filename=file.filename
+            original_filename=file.filename,
+            status=IngestionStatus.PENDING
         )
         
-        # NEW: Schedule background task (doesn't run yet, just queued)
+        # Start background task
         background_tasks.add_task(
             process_ingestion_background,
-            ingestion_id=ingestion_id,
-            file_path=temp_path,
-            collection_name=collection_name,
-            chunking_strategy=chunking_strategy,
-            original_filename=file.filename
+            ingestion_id,
+            temp_path,
+            collection_name,
+            chunking_strategy,
+            file.filename
         )
         
-        # NEW: Return IMMEDIATELY (don't wait for ingestion!)
+        # Return immediately with ingestion ID
         return IngestStartResponse(
             ingestion_id=ingestion_id,
             message=f"Ingestion started for '{file.filename}'",
@@ -351,13 +393,13 @@ async def ingest_pdf(
         )
         
     except Exception as e:
-        # Clean up on error (same as before)
+        # Clean up temp file if error occurs before background task starts
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except:
                 pass
-        raise HTTPException(status_code=500, detail=f"Failed to start: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")
 
 
 @app.get("/status/{ingestion_id}", response_model=StatusResponse)

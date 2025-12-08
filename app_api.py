@@ -79,6 +79,8 @@ if "available_collections" not in st.session_state:
     st.session_state.available_collections = []
 if "last_error" not in st.session_state:
     st.session_state.last_error = None
+if "active_ingestions" not in st.session_state:
+    st.session_state.active_ingestions = []
 
 # Helper functions
 def check_api_health():
@@ -115,9 +117,33 @@ def get_collections_api():
     except Exception as e:
         st.error(f"Failed to fetch collections: {str(e)}")
         return []
+    
+    
+def check_ingestion_status_api(ingestion_id: str):
+    """
+    Calls FastAPI /status/{id} endpoint to get current status.
+    Returns status data or error message.
+    """
+    try:
+        response = requests.get(
+            f"{API_URL}/status/{ingestion_id}",
+            timeout=5
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to check status: {str(e)}"
+        }
+
 
 def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss", chunking_strategy: str = "semantic"):
-    """Ingest PDF via API"""
+    """
+    Ingest PDF via API - NOW RETURNS IMMEDIATELY with ingestion_id.
+    OLD: Waited for completion
+    NEW: Returns ingestion_id instantly
+    """
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
         data = {
@@ -128,12 +154,13 @@ def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss", chunking_st
             f"{API_URL}/ingest",
             files=files,
             data=data,
-            timeout=300
+            timeout=10  # Changed from 300 to 10 - now returns quickly!
         )
         response.raise_for_status()
         return response.json()
     except Exception as e:
         raise Exception(f"API ingestion failed: {str(e)}")
+
 
 # Sidebar
 with st.sidebar:
@@ -240,6 +267,7 @@ with st.sidebar:
                         st.rerun()
     
     # INGESTION TAB
+        # INGESTION TAB
     elif st.session_state.sidebar_tab == "Ingestion":
         st.subheader("Upload New Document")
         
@@ -259,7 +287,7 @@ with st.sidebar:
             "Chunking Strategy",
             options=["semantic", "fixed"],
             index=0,
-            help="semantic: SemanticChunker (context-aware, slower) | fixed: RecursiveCharacterTextSplitter (fixed size, faster)"
+            help="semantic: context-aware (slower) | fixed: fixed-size (faster)"
         )
         
         uploaded_file = st.file_uploader(
@@ -269,26 +297,130 @@ with st.sidebar:
             label_visibility="collapsed"
         )
         
-        if st.button("Ingest Document", use_container_width=True, type="primary", disabled=uploaded_file is None or not collection_name_input):
+        # ========== START INGESTION BUTTON (UPDATED) ==========
+        if st.button("Start Ingestion", use_container_width=True, type="primary", 
+                     disabled=uploaded_file is None or not collection_name_input):
             if uploaded_file and collection_name_input:
-                try:
-                    strategy_text = "semantic (context-aware)" if chunking_strategy == "semantic" else "fixed-size"
-                    with st.spinner(f"Processing document with {strategy_text} chunking - May take 2-5 minutes..."):
-                        result = ingest_pdf_api(uploaded_file, collection_name_input, chunking_strategy)
+                # Strip whitespace from collection name
+                collection_name_input = collection_name_input.strip()
+                
+                # Validate collection name
+                if len(collection_name_input) < 3:
+                    st.error("Collection name must be at least 3 characters long")
+                elif not collection_name_input.replace("_", "").replace("-", "").replace(".", "").isalnum():
+                    st.error("Collection name can only contain letters, numbers, dots, underscores, and hyphens")
+                else:
+                    try:
+                        # Call API that now returns immediately
+                        with st.spinner("Starting ingestion..."):
+                            result = ingest_pdf_api(uploaded_file, collection_name_input, chunking_strategy)
+                        
+                        # Store ingestion info for tracking
+                        from datetime import datetime
+                        ingestion_id = result["ingestion_id"]
+                        st.session_state.active_ingestions.append({
+                            "id": ingestion_id,
+                            "filename": uploaded_file.name,
+                            "collection": collection_name_input,
+                            "strategy": chunking_strategy,
+                            "started_at": datetime.now().strftime("%H:%M:%S")
+                        })
+                        
+                        # Show success messages
+                        st.success("🎉 Ingestion Started!")
+                        st.info(f"📌 Ingestion ID: `{ingestion_id}`")
+                        st.info("💡 Processing in background. Check status below!")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error starting ingestion: {str(e)}")
+        
+        st.divider()
+        
+        # ========== STATUS MONITOR SECTION (NEW) ==========
+        st.subheader("📊 Active Ingestions")
+        
+        if not st.session_state.active_ingestions:
+            st.info("No active ingestions. Upload a document above to get started!")
+        
+        else:
+            # Show each ingestion's status
+            for idx, ing in enumerate(st.session_state.active_ingestions):
+                with st.expander(
+                    f"📄 {ing['filename']} ({ing['collection']}) - Started: {ing['started_at']}", 
+                    expanded=True
+                ):
+                    col1, col2 = st.columns([3, 1])
                     
-                    # Show completion message
-                    st.success("🎉 **INGESTION COMPLETED!**")
-                    st.success(f"✅ {result['message']}")
-                    st.success(f"✓ Created {result['num_chunks']} semantic chunks")
-                    st.success(f"📚 Collection: {result['collection_name']}")
-                    st.info("You can now switch to the Chat tab and start asking questions!")
+                    with col1:
+                        # Check current status from API
+                        status_data = check_ingestion_status_api(ing["id"])
+                        
+                        status = status_data.get("status", "unknown")
+                        message = status_data.get("message", "No message")
+                        progress = status_data.get("progress", 0)
+                        
+                        # Display status with appropriate styling
+                        if status == "pending":
+                            st.info(f"⏳ {message}")
+                        
+                        elif status == "processing":
+                            st.warning(f"🔄 {message}")
+                            # Show progress bar
+                            if progress:
+                                st.progress(progress / 100, text=f"{progress}% complete")
+                        
+                        elif status == "completed":
+                            st.success(f"✅ {message}")
+                            num_chunks = status_data.get("num_chunks", "?")
+                            st.success(f"📦 Created {num_chunks} chunks")
+                        
+                        elif status == "failed":
+                            st.error(f"❌ {message}")
+                            error = status_data.get("error")
+                            if error:
+                                with st.expander("Error Details"):
+                                    st.code(error)
+                        
+                        else:
+                            st.warning(f"❓ Unknown status: {status}")
+                        
+                        # Show ingestion details
+                        st.caption(f"ID: `{ing['id']}`")
+                        st.caption(f"Strategy: {ing['strategy']}")
                     
-                    # Update current collection to the newly ingested one
-                    st.session_state.current_collection = result['collection_name']
+                    with col2:
+                        # Refresh button
+                        if st.button("🔄", key=f"refresh_{idx}", help="Refresh status"):
+                            st.rerun()
+                        
+                        st.write("")  # Spacing
+                        
+                        # Remove button (only show for completed/failed)
+                        if status in ["completed", "failed", "error"]:
+                            if st.button("✕", key=f"remove_{idx}", help="Remove from list"):
+                                st.session_state.active_ingestions.pop(idx)
+                                st.rerun()
+            
+            st.divider()
+            
+            # ========== AUTO-REFRESH OPTION (NEW) ==========
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                auto_refresh = st.checkbox(
+                    "🔄 Auto-refresh every 5 seconds", 
+                    value=False,
+                    help="Automatically check status every 5 seconds"
+                )
+            with col2:
+                if st.button("🗑️ Clear All", help="Remove all ingestions from list"):
+                    st.session_state.active_ingestions = []
                     st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+            
+            # Auto-refresh logic
+            if auto_refresh:
+                import time
+                time.sleep(5)
+                st.rerun()
     
     st.divider()
 
