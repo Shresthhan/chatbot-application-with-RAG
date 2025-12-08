@@ -1,4 +1,4 @@
-# app.py - Streamlit UI for RAG Chatbot 
+# app.py - Streamlit UI with no FastAPI for RAG Chatbot 
 
 import streamlit as st
 import os

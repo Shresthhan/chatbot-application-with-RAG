@@ -28,24 +28,37 @@ def load_document(file_path):
     return documents
 
 # 4. SPLIT TEXT 
-def split_documents(documents, embeddings=None):
-    """Split documents into chunks using semantic chunking (context-aware)
+def split_documents(documents, embeddings=None, strategy="semantic"):
+    """Split documents into chunks using specified strategy
     
     Args:
         documents: List of documents to split
         embeddings: Pre-initialized embeddings instance (optional, will create if not provided)
+        strategy: Chunking strategy - "semantic" or "fixed"
     """
     print("Splitting document into chunks...")
-    print("Using semantic chunking (context-aware)...")
     
-    if embeddings is None:
-        embeddings = get_embeddings()
-    
-    text_splitter = SemanticChunker(
-        embeddings=embeddings,
-        breakpoint_threshold_type="percentile",  # Options: "percentile", "standard_deviation", "interquartile"
-        breakpoint_threshold_amount=None  # None = auto-calculate
-    )
+    if strategy == "semantic":
+        print("Using semantic chunking (context-aware)...")
+        
+        if embeddings is None:
+            embeddings = get_embeddings()
+        
+        text_splitter = SemanticChunker(
+            embeddings=embeddings,
+            breakpoint_threshold_type="percentile",
+            breakpoint_threshold_amount=None
+        )
+    else:  # fixed strategy
+        print("Using fixed-size chunking (RecursiveCharacterTextSplitter)...")
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=2000,
+            chunk_overlap=200,
+            length_function=len,
+            is_separator_regex=False
+        )
     
     chunks = text_splitter.split_documents(documents)
     print(f"Created {len(chunks)} chunks")
@@ -112,14 +125,15 @@ def ingest_document(file_path, append_mode=True, progress_callback=None):
     """
     return ingest_document_to_collection(file_path, COLLECTION_NAME, append_mode, progress_callback)
 
-def ingest_document_to_collection(file_path, collection_name, append_mode=True, progress_callback=None):
-    """Complete ingestion pipeline for a single document to a specific collection
+def ingest_document_to_collection(file_path, collection_name, append_mode=True, progress_callback=None, chunking_strategy="semantic"):
+    """Ingest a document into a specific collection
     
     Args:
         file_path: Path to the PDF file to ingest
         collection_name: Name of the collection to ingest into
         append_mode: If True, append to existing database. If False, replace database.
         progress_callback: Optional callback function to report progress (receives message string)
+        chunking_strategy: Chunking strategy - "semantic" or "fixed" (default: "semantic")
     
     Returns:
         tuple: (vectordb, num_chunks) - The vector database and number of chunks created
@@ -131,8 +145,8 @@ def ingest_document_to_collection(file_path, collection_name, append_mode=True, 
         # Initialize embeddings
         embeddings = get_embeddings()
         
-        # Split using semantic chunking (this is the slow part)
-        chunks = split_documents(documents, embeddings=embeddings)
+        # Split using specified chunking strategy (this is the slow part)
+        chunks = split_documents(documents, embeddings=embeddings, strategy=chunking_strategy)
         
         # Store in vector database with specific collection
         vectordb = store_in_vectordb(chunks, embeddings, append_mode=append_mode, collection_name=collection_name)

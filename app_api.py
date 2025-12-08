@@ -116,11 +116,14 @@ def get_collections_api():
         st.error(f"Failed to fetch collections: {str(e)}")
         return []
 
-def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss"):
+def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss", chunking_strategy: str = "semantic"):
     """Ingest PDF via API"""
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-        data = {"collection_name": collection_name}
+        data = {
+            "collection_name": collection_name,
+            "chunking_strategy": chunking_strategy
+        }
         response = requests.post(
             f"{API_URL}/ingest",
             files=files,
@@ -251,6 +254,14 @@ with st.sidebar:
         if st.session_state.available_collections:
             st.caption(f"Existing: {', '.join(st.session_state.available_collections)}")
         
+        # Chunking strategy selector
+        chunking_strategy = st.selectbox(
+            "Chunking Strategy",
+            options=["semantic", "fixed"],
+            index=0,
+            help="semantic: SemanticChunker (context-aware, slower) | fixed: RecursiveCharacterTextSplitter (fixed size, faster)"
+        )
+        
         uploaded_file = st.file_uploader(
             "Drag and drop PDF file",
             type=["pdf"],
@@ -261,8 +272,9 @@ with st.sidebar:
         if st.button("Ingest Document", use_container_width=True, type="primary", disabled=uploaded_file is None or not collection_name_input):
             if uploaded_file and collection_name_input:
                 try:
-                    with st.spinner(f"Processing document into '{collection_name_input}' - May take 2-5 minutes..."):
-                        result = ingest_pdf_api(uploaded_file, collection_name_input)
+                    strategy_text = "semantic (context-aware)" if chunking_strategy == "semantic" else "fixed-size"
+                    with st.spinner(f"Processing document with {strategy_text} chunking - May take 2-5 minutes..."):
+                        result = ingest_pdf_api(uploaded_file, collection_name_input, chunking_strategy)
                     
                     # Show completion message
                     st.success("🎉 **INGESTION COMPLETED!**")
