@@ -6,7 +6,7 @@ warnings.filterwarnings("ignore")
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 import shutil
 import os
@@ -53,49 +53,54 @@ def split_documents(documents, embeddings=None):
 
 # 5. CREATE EMBEDDINGS 
 def get_embeddings():
-    """Initialize Ollama embeddings"""
-    print("Initializing Ollama embeddings...")
-    embeddings = OllamaEmbeddings(
-        model="nomic-embed-text:latest",
-        base_url="http://localhost:11434"  # Your Ollama server
+    """Initialize HuggingFace embeddings"""
+    print("Initializing HuggingFace embeddings...")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-mpnet-base-v2",
+        model_kwargs={'device': 'cpu'}, 
+        encode_kwargs={'normalize_embeddings': True} 
     )
     return embeddings
 
 # 6. STORE IN VECTOR DB 
-def store_in_vectordb(chunks, embeddings, append_mode=False):
+def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name=None):
     """Store chunks in Chroma vector database
     
     Args:
         chunks: Document chunks to store
         embeddings: Embeddings instance
         append_mode: If True, append to existing database. If False, create new database.
+        collection_name: Name of the collection (defaults to COLLECTION_NAME)
     """
-    print(f"Storing chunks in Chroma at {CHROMA_PATH}...")
+    if collection_name is None:
+        collection_name = COLLECTION_NAME
+    
+    print(f"Storing chunks in collection '{collection_name}' at {CHROMA_PATH}...")
     
     if append_mode and os.path.exists(CHROMA_PATH):
         # Load existing database and add new documents
         vectordb = Chroma(
             persist_directory=CHROMA_PATH,
             embedding_function=embeddings,
-            collection_name=COLLECTION_NAME
+            collection_name=collection_name
         )
         vectordb.add_documents(chunks)
-        print("✓ Documents appended to existing database!")
+        print(f"✓ Documents appended to collection '{collection_name}'!")
     else:
         # Create new database
         vectordb = Chroma.from_documents(
             documents=chunks,
             embedding=embeddings,
             persist_directory=CHROMA_PATH,
-            collection_name=COLLECTION_NAME
+            collection_name=collection_name
         )
-        print("✓ New database created successfully!")
+        print(f"✓ New collection '{collection_name}' created successfully!")
     
     return vectordb
 
 # 6.5. INGEST DOCUMENT (FOR UI)
 def ingest_document(file_path, append_mode=True, progress_callback=None):
-    """Complete ingestion pipeline for a single document
+    """Complete ingestion pipeline for a single document (default collection)
     
     Args:
         file_path: Path to the PDF file to ingest
@@ -105,26 +110,32 @@ def ingest_document(file_path, append_mode=True, progress_callback=None):
     Returns:
         tuple: (vectordb, num_chunks) - The vector database and number of chunks created
     """
+    return ingest_document_to_collection(file_path, COLLECTION_NAME, append_mode, progress_callback)
+
+def ingest_document_to_collection(file_path, collection_name, append_mode=True, progress_callback=None):
+    """Complete ingestion pipeline for a single document to a specific collection
+    
+    Args:
+        file_path: Path to the PDF file to ingest
+        collection_name: Name of the collection to ingest into
+        append_mode: If True, append to existing database. If False, replace database.
+        progress_callback: Optional callback function to report progress (receives message string)
+    
+    Returns:
+        tuple: (vectordb, num_chunks) - The vector database and number of chunks created
+    """
     try:
         # Load document
-        if progress_callback:
-            progress_callback("Loading document...")
         documents = load_document(file_path)
         
         # Initialize embeddings
-        if progress_callback:
-            progress_callback(f"Initializing embeddings for {len(documents)} pages...")
         embeddings = get_embeddings()
         
         # Split using semantic chunking (this is the slow part)
-        if progress_callback:
-            progress_callback("Analyzing document semantics (this may take 2-5 minutes)...")
         chunks = split_documents(documents, embeddings=embeddings)
         
-        # Store in vector database
-        if progress_callback:
-            progress_callback(f"Storing {len(chunks)} chunks in database...")
-        vectordb = store_in_vectordb(chunks, embeddings, append_mode=append_mode)
+        # Store in vector database with specific collection
+        vectordb = store_in_vectordb(chunks, embeddings, append_mode=append_mode, collection_name=collection_name)
         
         return vectordb, len(chunks)
         

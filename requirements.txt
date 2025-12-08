@@ -3,6 +3,7 @@ chromadb>=0.4.24
 langchain-community>=0.3.0
 langchain-experimental
 langchain-google-genai
+langchain-huggingface
 langchain-text-splitters
 pypdf
 sentence-transformers
@@ -10,3 +11,5 @@ python-dotenv
 streamlit
 fastapi
 uvicorn
+python-multipart
+requests

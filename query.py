@@ -6,7 +6,7 @@ warnings.filterwarnings("ignore")
 import os
 from dotenv import load_dotenv
 
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -23,19 +23,24 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # 1. LOAD EXISTING VECTOR DB
 def load_vectordb():
-    """Load the Chroma vector database we created"""
-    # print("Loading vector database...")
-    embeddings = OllamaEmbeddings(
-        model="nomic-embed-text:latest",
-        base_url="http://localhost:11434"
+    """Load the Chroma vector database we created (default collection)"""
+    return load_vectordb_with_collection(COLLECTION_NAME)
+
+def load_vectordb_with_collection(collection_name: str):
+    """Load a specific collection from the vector database"""
+    # print(f"Loading collection '{collection_name}'...")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-mpnet-base-v2",  # Better quality
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True}
     )
     
     vectordb = Chroma(
         persist_directory=CHROMA_PATH,
         embedding_function=embeddings,
-        collection_name=COLLECTION_NAME
+        collection_name=collection_name
     )
-    # print(f"✓ Loaded collection '{COLLECTION_NAME}'")
+    # print(f"✓ Loaded collection '{collection_name}'")
     return vectordb
 
 # 2. SETUP LLM
@@ -50,15 +55,20 @@ def get_llm():
 
 # 3. CREATE RAG CHAIN
 def create_rag_chain(vectordb, llm):
-    """Create a Retrieval QA chain using LCEL"""
+    """Create a Retrieval QA chain using LCEL (LangChain Expression Language)"""
     retriever = vectordb.as_retriever(search_kwargs={"k": 3})
     
     # Define the prompt template
     template = """You are a helpful research assistant. 
-    Use the following context from a research paper to answer the question. 
-    If the answer is in the context, provide a detailed response. 
-    If not explicitly stated but related information exists, 
-    provide what you can infer from the context.
+
+    IMPORTANT: If the user's message is a greeting (like "hi", "hello", "hey", "how are you"), 
+    respond warmly and naturally WITHOUT referring to any context. Ask how you can help them.
+    
+    For actual questions:
+    - Use the following context from the research paper to answer the question
+    - If the answer is in the context, provide a detailed response
+    - If not explicitly stated but related information exists, provide what you can infer
+    - If the context is not relevant to the question, say so clearly
 
 Context:
 {context}
