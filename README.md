@@ -92,13 +92,6 @@ UI will open at http://localhost:8501
 2. Ask questions in the chat
 3. Get answers with source chunks!
 
-## 📖 Documentation
-
-- **[QUICKSTART.md](QUICKSTART.md)** - Get started in 3 steps
-- **[MULTI_COLLECTION_GUIDE.md](MULTI_COLLECTION_GUIDE.md)** - Comprehensive guide for collections
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and data flow
-- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Technical implementation details
-
 ## 🏗️ Architecture
 
 ```
@@ -139,39 +132,6 @@ ChromaDB Vector Database
 - Collection: "technical_docs" - Technical documentation
 - Collection: "business_docs" - Business documents
 - Collection: "legal_docs" - Legal documents
-
-## 🧪 Testing
-
-Run automated tests:
-```bash
-.venv\Scripts\python.exe test_collections.py
-```
-
-This will:
-- Check API connectivity
-- List all collections
-- Test querying each collection
-
-## 📂 Project Structure
-
-```
-chatbot-application-with-RAG/
-├── api.py                      # FastAPI backend
-├── app_api.py                  # Streamlit UI (API version)
-├── app.py                      # Streamlit UI (direct version)
-├── query.py                    # RAG query logic
-├── ingest.py                   # Document ingestion
-├── requirements.txt            # Dependencies
-├── test_collections.py         # Automated tests
-├── QUICKSTART.md              # Quick start guide
-├── MULTI_COLLECTION_GUIDE.md  # Collection guide
-├── ARCHITECTURE.md            # Architecture docs
-├── IMPLEMENTATION_SUMMARY.md  # Technical details
-└── Vector_DB/                 # ChromaDB storage
-    ├── my_docss/              # Default collection
-    ├── research_papers/        # Custom collection
-    └── technical_docs/         # Custom collection
-```
 
 ## 🔌 API Endpoints
 
@@ -214,44 +174,3 @@ Query Parameter:
 - **Collection Info** - Display chunk counts per collection
 - **Session Management** - Create, switch, delete chat sessions
 
-## 🔐 Environment Variables
-
-Required in `.env` file:
-```
-GOOGLE_API_KEY=your_gemini_api_key_here
-```
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📝 License
-
-[Your License Here]
-
-## 🙏 Acknowledgments
-
-- LangChain for RAG framework
-- Google for Gemini API
-- HuggingFace for embeddings
-- ChromaDB for vector storage
-- Streamlit for UI framework
-
-## 📞 Support
-
-For issues or questions:
-- Check documentation in `/docs` folder
-- Review API docs at http://localhost:8000/docs
-- Open an issue on GitHub
-
----
-
-**Version**: 2.0.0  
-**Status**: Production Ready ✅  
-**Multi-Collection Support**: Enabled 🎉
-
-Made with ❤️ for better document intelligence
