@@ -71,17 +71,29 @@ GOOGLE_API_KEY=your_api_key_here
 
 ### Running the Application
 
+**Easy Method - Use Batch Scripts:**
+
+1. **Start Backend:** Double-click `start_backend.bat`
+2. **Start Frontend:** Double-click `start_frontend.bat`
+
+**Manual Method:**
+
 #### Step 1: Start FastAPI Backend
 ```bash
-.venv\Scripts\python.exe api.py
+python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 ```
 API will run on http://localhost:8000
 
 #### Step 2: Start Streamlit UI
 ```bash
-.venv\Scripts\python.exe -m streamlit run app_api.py
+streamlit run frontend\app_api.py
 ```
 UI will open at http://localhost:8501
+
+**Legacy App (without API):**
+```bash
+streamlit run app\app.py
+```
 
 #### Step 3: Create Collections & Upload Documents
 1. Go to **Ingestion** tab
@@ -97,14 +109,37 @@ UI will open at http://localhost:8501
 2. Ask questions in the chat
 3. Get answers with source chunks!
 
+## 📁 Project Structure
+
+```
+chatbot-application-with-RAG/
+├── backend/              # FastAPI backend
+│   ├── api.py           # FastAPI endpoints & RAG system
+│   ├── database.py      # SQLAlchemy models for job tracking
+│   ├── ingest.py        # Document ingestion logic
+│   └── query.py         # RAG query logic
+├── frontend/            # Streamlit UI (API-based)
+│   └── app_api.py       # Main Streamlit app with API calls
+├── app/                 # Legacy standalone app
+│   └── app.py           # Streamlit app without API
+├── data/                # PDF documents (if any)
+├── Vector_DB/           # ChromaDB storage (gitignored)
+├── .venv/               # Virtual environment (gitignored)
+├── requirements.txt     # Python dependencies
+├── .env                 # Environment variables (gitignored)
+├── start_backend.bat    # Quick start script for API
+├── start_frontend.bat   # Quick start script for UI
+└── README.md            # This file
+```
+
 ## 🏗️ Architecture
 
 ```
-Streamlit UI (app_api.py)
+Streamlit UI (frontend/app_api.py)
     ↓ REST API calls
-FastAPI Backend (api.py)
+FastAPI Backend (backend/api.py)
     ↓ Collection-specific queries
-ChromaDB Vector Database
+ChromaDB Vector Database (Vector_DB/)
     ├── Collection: my_docss
     ├── Collection: research_papers
     └── Collection: technical_docs

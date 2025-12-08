@@ -5,8 +5,8 @@ import os
 import tempfile
 
 # Import all logic from other files
-from query import load_vectordb, get_llm, create_rag_chain
-from ingest import ingest_document
+from backend.query import load_vectordb, get_llm, create_rag_chain
+from backend.ingest import ingest_document
 
 # Page configuration
 st.set_page_config(

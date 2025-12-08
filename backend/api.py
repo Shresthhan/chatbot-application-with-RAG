@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 
 # Import our new database functions
-from database import (
+from backend.database import (
     init_db, 
     get_db, 
     create_ingestion_job, 
@@ -24,8 +24,8 @@ from database import (
     SessionLocal
 )
 
-from query import load_vectordb, get_llm, create_rag_chain
-from ingest import ingest_document
+from backend.query import load_vectordb, get_llm, create_rag_chain
+from backend.ingest import ingest_document
 
 # Initialize FastAPI app
 app = FastAPI(title="RAG Chatbot API", version="1.0.0")
@@ -108,7 +108,7 @@ def initialize_rag_system(collection_name: str = "my_docss"):
         return False
     
     # Import with collection parameter
-    from query import load_vectordb_with_collection, get_llm, create_rag_chain
+    from backend.query import load_vectordb_with_collection, get_llm, create_rag_chain
     
     vectordb = load_vectordb_with_collection(collection_name)
     llm = get_llm()
@@ -242,7 +242,7 @@ def process_ingestion_background(
         )
         
         # Import ingestion function
-        from ingest import ingest_document_to_collection
+        from backend.ingest import ingest_document_to_collection
         
         # Update progress
         update_ingestion_job(
