@@ -81,6 +81,8 @@ if "last_error" not in st.session_state:
     st.session_state.last_error = None
 if "active_ingestions" not in st.session_state:
     st.session_state.active_ingestions = []
+if "retrieval_k" not in st.session_state:
+    st.session_state.retrieval_k = 3  # Default k value
 
 # Helper functions
 def check_api_health():
@@ -91,12 +93,12 @@ def check_api_health():
     except:
         return False
 
-def query_api(question: str, collection_name: str = "my_docss"):
+def query_api(question: str, collection_name: str = "my_docss", k: int = 3):
     """Query the RAG system via API"""
     try:
         response = requests.post(
             f"{API_URL}/query",
-            json={"question": question, "collection_name": collection_name},
+            json={"question": question, "collection_name": collection_name, "k": k},
             timeout=60
         )
         response.raise_for_status()
@@ -195,6 +197,20 @@ with st.sidebar:
             st.info(f"📄 {chunk_count} chunks")
     else:
         st.warning("No collections found. Upload a document to create one.")
+    
+    st.divider()
+    
+    # Retrieval k parameter
+    st.subheader("🔍 Retrieval Settings")
+    st.session_state.retrieval_k = st.slider(
+        "Number of chunks to retrieve (k)",
+        min_value=1,
+        max_value=10,
+        value=st.session_state.retrieval_k,
+        step=1,
+        help="Controls how many document chunks are retrieved for context. Experiment with different values to compare performance!"
+    )
+    st.caption(f"Currently retrieving **{st.session_state.retrieval_k}** chunks per query")
     
     st.divider()
     
@@ -490,10 +506,10 @@ try:
         if st.session_state.pending_query and st.session_state.pending_session == st.session_state.current_session:
             query = st.session_state.pending_query
             
-            # Get response from API (using current collection)
-            with st.spinner(f"Thinking... (Using collection: {st.session_state.current_collection})"):
+            # Get response from API (using current collection and k value)
+            with st.spinner(f"Thinking... (Using collection: {st.session_state.current_collection}, retrieving {st.session_state.retrieval_k} chunks)"):
                 try:
-                    result = query_api(query, st.session_state.current_collection)
+                    result = query_api(query, st.session_state.current_collection, st.session_state.retrieval_k)
                     response = result["answer"]
                     source_chunks = result["chunks"]
                     st.session_state.last_error = None  # Clear any previous error

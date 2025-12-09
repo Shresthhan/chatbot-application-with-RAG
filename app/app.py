@@ -73,18 +73,39 @@ if "pending_query" not in st.session_state:
     st.session_state.pending_query = None
 if "pending_session" not in st.session_state:
     st.session_state.pending_session = None
+if "retrieval_k" not in st.session_state:
+    st.session_state.retrieval_k = 3  # Default k value
 
 # Load RAG system (cached to avoid reloading)
 @st.cache_resource
 def load_rag_system():
-    """Load and cache the RAG system"""
+    """Load and cache the vector database and LLM"""
     vectordb = load_vectordb()
     llm = get_llm()
-    rag_chain, retriever = create_rag_chain(vectordb, llm)
+    return vectordb, llm
+
+def get_rag_chain_with_k(k: int):
+    """Create RAG chain with specified k value"""
+    vectordb, llm = load_rag_system()
+    rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
     return rag_chain, retriever
 
 # Sidebar (always visible)
 with st.sidebar:
+        # Retrieval k parameter
+        st.subheader("🔍 Retrieval Settings")
+        st.session_state.retrieval_k = st.slider(
+            "Number of chunks to retrieve (k)",
+            min_value=1,
+            max_value=10,
+            value=st.session_state.retrieval_k,
+            step=1,
+            help="Controls how many document chunks are retrieved for context. Experiment with different values!"
+        )
+        st.caption(f"Currently retrieving **{st.session_state.retrieval_k}** chunks per query")
+        
+        st.divider()
+        
         # Tab selection
         if st.button("Chat", use_container_width=True, 
                     type="primary" if st.session_state.sidebar_tab == "Chat History" else "secondary"):
@@ -271,8 +292,10 @@ if os.path.exists("./Vector_DB"):
         if st.session_state.pending_query and st.session_state.pending_session == st.session_state.current_session:
             query = st.session_state.pending_query
             
-            # Get response and source chunks
-            with st.spinner("Thinking..."):
+            # Get response and source chunks (using current k value)
+            with st.spinner(f"Thinking... (retrieving {st.session_state.retrieval_k} chunks)"):
+                # Create RAG chain with current k value
+                rag_chain, retriever = get_rag_chain_with_k(st.session_state.retrieval_k)
                 response = rag_chain.invoke(query)
                 # Get the same chunks the RAG chain used
                 source_chunks = retriever.invoke(query)

@@ -48,6 +48,7 @@ vectordbs = {}
 class QueryRequest(BaseModel):
     question: str
     collection_name: str  # Required collection name
+    k: Optional[int] = 3  # Number of chunks to retrieve (default: 3)
 
 class QueryResponse(BaseModel):
     answer: str
@@ -179,11 +180,19 @@ async def health_check():
 # Query endpoint
 @app.post("/query", response_model=QueryResponse)
 async def query_rag(request: QueryRequest):
-    """Query the RAG system for a specific collection"""
+    """Query the RAG system for a specific collection with dynamic k parameter"""
     collection_name = request.collection_name
+    k = request.k  # User-specified number of chunks to retrieve
+    
+    # Validate k value
+    if k < 1 or k > 20:
+        raise HTTPException(
+            status_code=400,
+            detail="k must be between 1 and 20"
+        )
     
     # Check if collection is loaded
-    if collection_name not in rag_chains or collection_name not in retrievers:
+    if collection_name not in vectordbs:
         if not initialize_rag_system(collection_name):
             raise HTTPException(
                 status_code=503,
@@ -191,11 +200,23 @@ async def query_rag(request: QueryRequest):
             )
     
     try:
-        # Get answer from RAG chain for this collection
-        answer = rag_chains[collection_name].invoke(request.question)
+        # Import LLM and chain creation
+        from backend.query import get_llm, create_rag_chain
         
-        # Get source chunks from this collection
-        source_docs = retrievers[collection_name].invoke(request.question)
+        # Get the vectordb for this collection (already cached)
+        vectordb = vectordbs[collection_name]
+        
+        # Get LLM
+        llm = get_llm()
+        
+        # Create RAG chain with user-specified k value
+        rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
+        
+        # Get answer from RAG chain
+        answer = rag_chain.invoke(request.question)
+        
+        # Get source chunks (will return exactly k chunks)
+        source_docs = retriever.invoke(request.question)
         
         # Format chunks
         chunks = []
@@ -300,7 +321,6 @@ def process_ingestion_background(
                 pass
 
 
-# Ingest endpoint
 # Ingest endpoint
 @app.post("/ingest", response_model=IngestStartResponse)
 async def ingest_pdf(
@@ -426,26 +446,26 @@ async def check_status(
     return StatusResponse(**job.to_dict())
 
 
-@app.get("/ingestions") #(optional, for admin/debugging)
-async def list_all_ingestions(
-    limit: int = 50,
-    db: Session = Depends(get_db)
-):
-    """
-    NEW ENDPOINT - List all ingestion jobs (most recent first).
+# @app.get("/ingestions") #(optional, for admin/debugging)
+# async def list_all_ingestions(
+#     limit: int = 50,
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     NEW ENDPOINT - List all ingestion jobs (most recent first).
     
-    Useful for:
-    - Seeing all past ingestions
-    - Debugging
-    - Admin dashboard
+#     Useful for:
+#     - Seeing all past ingestions
+#     - Debugging
+#     - Admin dashboard
     
-    Example: GET /ingestions?limit=20
-    """
-    jobs = list_ingestion_jobs(db, limit=limit)
-    return {
-        "total": len(jobs),
-        "ingestions": [job.to_dict() for job in jobs]
-    }
+#     Example: GET /ingestions?limit=20
+#     """
+#     jobs = list_ingestion_jobs(db, limit=limit)
+#     return {
+#         "total": len(jobs),
+#         "ingestions": [job.to_dict() for job in jobs]
+#     }
 
 
 # List collections endpoint

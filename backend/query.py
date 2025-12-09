@@ -54,9 +54,15 @@ def get_llm():
     return llm
 
 # 3. CREATE RAG CHAIN
-def create_rag_chain(vectordb, llm):
-    """Create a Retrieval QA chain using LCEL (LangChain Expression Language)"""
-    retriever = vectordb.as_retriever(search_kwargs={"k": 3})
+def create_rag_chain(vectordb, llm, k=3):
+    """Create a Retrieval QA chain using LCEL (LangChain Expression Language)
+    
+    Args:
+        vectordb: ChromaDB vector database instance
+        llm: Language model instance
+        k: Number of document chunks to retrieve (default: 3)
+    """
+    retriever = vectordb.as_retriever(search_kwargs={"k": k})
     
     # Define the prompt template
     template = """You are a helpful research assistant. 
