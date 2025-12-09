@@ -4,14 +4,14 @@ A powerful Retrieval-Augmented Generation (RAG) chatbot with **multi-collection 
 
 ## ✨ Key Features
 
-- 🗂️ **Multi-Collection Support** - Create unlimited collections for different topics/projects
-- 🔍 **Intelligent Retrieval** - Semantic search using HuggingFace embeddings
-- 💬 **Natural Conversations** - Powered by Google Gemini 2.5-Flash
-- 📄 **Source Tracking** - View the exact chunks used to generate answers
-- 🎨 **Modern UI** - Clean Streamlit interface with collection management
-- 🚀 **FastAPI Backend** - RESTful API architecture for scalability
-- 📊 **Semantic Chunking** - Context-aware document splitting
-- 💾 **Persistent Storage** - ChromaDB vector database
+- **Multi-Collection Support** - Create unlimited collections for different topics/projects
+- **Intelligent Retrieval** - Semantic search using HuggingFace embeddings
+- **Natural Conversations** - Powered by Google Gemini 2.5-Flash
+- **Source Tracking** - View the exact chunks used to generate answers
+- **Modern UI** - Clean Streamlit interface with collection management
+- **FastAPI Backend** - RESTful API architecture for scalability
+- **Semantic Chunking** - Context-aware document splitting
+- **Persistent Storage** - ChromaDB vector database
 
 ## 🆕 What's New in v2.0
 
@@ -132,7 +132,7 @@ chatbot-application-with-RAG/
 └── README.md            # This file
 ```
 
-## 🏗️ Architecture
+## Architecture
 ### System Architecture
 <img src="images/chat-RAG-mermaid-diagram.png" width="500">
 
@@ -146,7 +146,7 @@ chatbot-application-with-RAG/
 
 
 
-## 🔧 Technology Stack
+## Technology Stack
 
 | Component | Technology |
 |-----------|-----------|
@@ -158,7 +158,7 @@ chatbot-application-with-RAG/
 | **Chunking** | SemanticChunker + RecursiveCharacterTextSplitter |
 | **Job Tracking** | SQLAlchemy + SQLite |
 
-## 🎯 Use Cases
+## Use Cases
 
 ### Research Papers
 - Collection: "ml_papers" - Machine Learning research
@@ -222,7 +222,7 @@ Query Parameter:
 - collection_name: "specific_collection" (optional)
 ```
 
-## 🎨 UI Features
+## UI Features
 
 - **Collection Selector** - Dropdown to choose active collection
 - **Chat Interface** - Multi-session chat history
@@ -231,7 +231,7 @@ Query Parameter:
 - **Collection Info** - Display chunk counts per collection
 - **Session Management** - Create, switch, delete chat sessions
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### API Not Responding
 - **Issue**: Streamlit shows connection errors
@@ -263,7 +263,7 @@ Query Parameter:
   - Large PDFs may take 5-10 minutes
   - Restart API if truly stuck
 
-## 📝 Collection Naming Rules
+## Collection Naming Rules
 
 Collection names must:
 - Be at least 3 characters long
@@ -272,10 +272,10 @@ Collection names must:
 - **No spaces or trailing whitespace**
 
 Examples:
-✅ `research_papers_2024`
-✅ `my-collection.v2`
-✅ `project_alpha`
-❌ `my collection` (space)
-❌ `report ` (trailing space)
-❌ `ab` (too short)
+- ✅ `research_papers_2024` 
+- ✅ `my-collection.v2` 
+- ✅ `project_alpha` 
+- ❌ `my collection` (space) 
+- ❌ `report ` (trailing space) 
+- ❌ `ab` (too short)
 
