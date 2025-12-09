@@ -12,25 +12,30 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langfuse.langchain import CallbackHandler
 
-# Load environment variables
+# Load environment variables FIRST
 load_dotenv()
 
-# Configuration (same as ingestion)
+# Initialize Langfuse handler
+langfuse_handler = CallbackHandler()
+
+# Configuration
 CHROMA_PATH = "./Vector_DB"
 COLLECTION_NAME = "my_docss"
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
 
 # 1. LOAD EXISTING VECTOR DB
 def load_vectordb():
     """Load the Chroma vector database we created (default collection)"""
     return load_vectordb_with_collection(COLLECTION_NAME)
 
+
 def load_vectordb_with_collection(collection_name: str):
     """Load a specific collection from the vector database"""
-    # print(f"Loading collection '{collection_name}'...")
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2",  # Better quality
+        model_name="sentence-transformers/all-mpnet-base-v2",
         model_kwargs={'device': 'cpu'},
         encode_kwargs={'normalize_embeddings': True}
     )
@@ -40,8 +45,8 @@ def load_vectordb_with_collection(collection_name: str):
         embedding_function=embeddings,
         collection_name=collection_name
     )
-    # print(f"✓ Loaded collection '{collection_name}'")
     return vectordb
+
 
 # 2. SETUP LLM
 def get_llm():
@@ -52,6 +57,7 @@ def get_llm():
         temperature=0.3
     )
     return llm
+
 
 # 3. CREATE RAG CHAIN
 def create_rag_chain(vectordb, llm, k=3):
@@ -98,21 +104,36 @@ Answer:"""
     
     return rag_chain, retriever
 
+
 # 4. ASK QUESTIONS
-def ask_question(rag_chain, retriever, question):
-    """Query the RAG system"""
-    # print(f"\nQuestion: {question}")
-    # print("Searching and generating answer...\n")
+def ask_question(rag_chain, retriever, question, k=3):
+    """Query the RAG system with Langfuse tracing
     
-    # Get the answer from the chain
-    answer = rag_chain.invoke(question)
+    Args:
+        rag_chain: The RAG chain to invoke
+        retriever: The retriever instance
+        question: User's question
+        k: Number of chunks retrieved (for metadata)
+    """
     
-    # Get source documents separately
+    # Get the answer with Langfuse tracing
+    answer = rag_chain.invoke(
+        question,
+        config={
+            "callbacks": [langfuse_handler],
+            "metadata": {
+                "retrieval_k": k,
+                "collection": COLLECTION_NAME
+            }
+        }
+    )
+    
+    # Get source documents separately (for display only)
     sources = retriever.invoke(question)
     
     print(f"Answer: {answer}\n")
-    # print(f"Sources: {len(sources)} document chunks used")
     return answer
+
 
 def main():
     print("=== RAG Query System ===\n")
@@ -142,6 +163,7 @@ def main():
         # Ask the question
         ask_question(rag_chain, retriever, question)
         print("-" * 50)
+
 
 if __name__ == "__main__":
     main()

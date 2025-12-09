@@ -83,6 +83,9 @@ if "active_ingestions" not in st.session_state:
     st.session_state.active_ingestions = []
 if "retrieval_k" not in st.session_state:
     st.session_state.retrieval_k = 3  # Default k value
+# ========== NEW: Track last query for Langfuse info ==========
+if "last_query_k" not in st.session_state:
+    st.session_state.last_query_k = None
 
 # Helper functions
 def check_api_health():
@@ -120,7 +123,6 @@ def get_collections_api():
         st.error(f"Failed to fetch collections: {str(e)}")
         return []
     
-    
 def check_ingestion_status_api(ingestion_id: str):
     """
     Calls FastAPI /status/{id} endpoint to get current status.
@@ -138,7 +140,6 @@ def check_ingestion_status_api(ingestion_id: str):
             "status": "error",
             "message": f"Failed to check status: {str(e)}"
         }
-
 
 def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss", chunking_strategy: str = "semantic"):
     """
@@ -162,7 +163,6 @@ def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss", chunking_st
         return response.json()
     except Exception as e:
         raise Exception(f"API ingestion failed: {str(e)}")
-
 
 # Sidebar
 with st.sidebar:
@@ -213,6 +213,42 @@ with st.sidebar:
     st.caption(f"Currently retrieving **{st.session_state.retrieval_k}** chunks per query")
     
     st.divider()
+    
+    # ========== NEW: LANGFUSE OBSERVABILITY SECTION ==========
+    st.subheader("🔍 Observability")
+    
+    # Get Langfuse host from environment variable
+    langfuse_host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    
+    # Status indicator and link
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(
+            f'<a href="{langfuse_host}" target="_blank" style="text-decoration: none; '
+            f'display: block; text-align: center; padding: 10px; background-color: #4A90E2; '
+            f'color: white; border-radius: 4px; font-weight: 500;">📊 Open Langfuse</a>',
+            unsafe_allow_html=True
+        )
+    
+    with col2:
+        # Check if Langfuse is reachable
+        try:
+            response = requests.get(f"{langfuse_host}/api/public/health", timeout=2)
+            if response.status_code == 200:
+                st.markdown("🟢", help="Langfuse is running")
+            else:
+                st.markdown("🟡", help="Langfuse status unknown")
+        except:
+            st.markdown("🔴", help="Langfuse is not reachable")
+    
+    st.caption("Monitor query performance and debug issues")
+    
+    # Show last query info
+    if st.session_state.last_query_k is not None:
+        st.info(f"📍 Last query: k={st.session_state.last_query_k}, collection='{st.session_state.current_collection}'")
+    
+    st.divider()
+    # ========== END NEW SECTION ==========
     
     # Tab selection
     if st.button("Chat", use_container_width=True, 
@@ -283,7 +319,6 @@ with st.sidebar:
                         st.rerun()
     
     # INGESTION TAB
-        # INGESTION TAB
     elif st.session_state.sidebar_tab == "Ingestion":
         st.subheader("Upload New Document")
         
@@ -313,7 +348,7 @@ with st.sidebar:
             label_visibility="collapsed"
         )
         
-        # ========== START INGESTION BUTTON (UPDATED) ==========
+        # START INGESTION BUTTON
         if st.button("Start Ingestion", use_container_width=True, type="primary", 
                      disabled=uploaded_file is None or not collection_name_input):
             if uploaded_file and collection_name_input:
@@ -352,7 +387,7 @@ with st.sidebar:
         
         st.divider()
         
-        # ========== STATUS MONITOR SECTION (NEW) ==========
+        # STATUS MONITOR SECTION
         st.subheader("📊 Active Ingestions")
         
         if not st.session_state.active_ingestions:
@@ -419,7 +454,7 @@ with st.sidebar:
             
             st.divider()
             
-            # ========== AUTO-REFRESH OPTION (NEW) ==========
+            # AUTO-REFRESH OPTION
             col1, col2 = st.columns([2, 1])
             with col1:
                 auto_refresh = st.checkbox(
@@ -513,6 +548,10 @@ try:
                     response = result["answer"]
                     source_chunks = result["chunks"]
                     st.session_state.last_error = None  # Clear any previous error
+                    
+                    # ========== NEW: Track k-value for Langfuse info display ==========
+                    st.session_state.last_query_k = st.session_state.retrieval_k
+                    
                 except Exception as e:
                     import traceback
                     error_details = {

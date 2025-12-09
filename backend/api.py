@@ -11,6 +11,9 @@ import re
 import shutil
 import uuid
 from datetime import datetime
+from langfuse.langchain import CallbackHandler
+from langfuse import Langfuse
+
 
 # Import our new database functions
 from backend.database import (
@@ -43,6 +46,16 @@ app.add_middleware(
 rag_chains = {}
 retrievers = {}
 vectordbs = {}
+
+# Initialize Langfuse for observability
+try:
+    langfuse_handler = CallbackHandler()
+    langfuse_client = Langfuse()
+    print("✓ Langfuse initialized successfully")
+except Exception as e:
+    print(f"⚠ Langfuse initialization failed: {e}")
+    langfuse_handler = None
+    langfuse_client = None
 
 # Pydantic models
 class QueryRequest(BaseModel):
@@ -212,8 +225,22 @@ async def query_rag(request: QueryRequest):
         # Create RAG chain with user-specified k value
         rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
         
-        # Get answer from RAG chain
-        answer = rag_chain.invoke(request.question)
+        # Get answer from RAG chain WITH Langfuse tracing
+        if langfuse_handler:
+            answer = rag_chain.invoke(
+                request.question,
+                config={
+                    "callbacks": [langfuse_handler],
+                    "metadata": {
+                        "retrieval_k": k,
+                        "collection_name": collection_name,
+                        "endpoint": "/query"
+                    }
+                }
+            )
+        else:
+            # Fallback if Langfuse is not available
+            answer = rag_chain.invoke(request.question)
         
         # Get source chunks (will return exactly k chunks)
         source_docs = retriever.invoke(request.question)
@@ -227,11 +254,13 @@ async def query_rag(request: QueryRequest):
                 "metadata": doc.metadata,
                 "length": len(doc.page_content)
             })
+
         
         return QueryResponse(answer=answer, chunks=chunks)
-    
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
     
 
 def process_ingestion_background(
