@@ -1,4 +1,4 @@
-# Multi-Collection RAG Chatbot 🤖📚
+# chatbot-application-implementing-RAG 🤖
 
 A powerful Retrieval-Augmented Generation (RAG) chatbot with **multi-collection support**, allowing you to organize and query different document sets independently.
 
