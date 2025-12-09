@@ -114,7 +114,7 @@ class StatusResponse(BaseModel):
 
 
 # Helper function to initialize RAG system for a specific collection
-def initialize_rag_system(collection_name: str = "my_docss"):
+def initialize_rag_system(collection_name: str):
     """Initialize or reload the RAG system for a specific collection"""
     global rag_chains, retrievers, vectordbs
     
@@ -193,59 +193,92 @@ async def health_check():
 # Query endpoint
 @app.post("/query", response_model=QueryResponse)
 async def query_rag(request: QueryRequest):
-    """Query the RAG system for a specific collection with dynamic k parameter"""
+    """Query the RAG system with detailed tracing"""
     collection_name = request.collection_name
-    k = request.k  # User-specified number of chunks to retrieve
+    k = request.k
     
     # Validate k value
     if k < 1 or k > 20:
-        raise HTTPException(
-            status_code=400,
-            detail="k must be between 1 and 20"
-        )
+        raise HTTPException(status_code=400, detail="k must be between 1 and 20")
     
     # Check if collection is loaded
     if collection_name not in vectordbs:
         if not initialize_rag_system(collection_name):
             raise HTTPException(
                 status_code=503,
-                detail=f"Collection '{collection_name}' not found. Please ingest documents first."
+                detail=f"Collection '{collection_name}' not found."
             )
     
     try:
-        # Import LLM and chain creation
         from backend.query import get_llm, create_rag_chain
         
-        # Get the vectordb for this collection (already cached)
         vectordb = vectordbs[collection_name]
-        
-        # Get LLM
         llm = get_llm()
-        
-        # Create RAG chain with user-specified k value
         rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
         
-        # Get answer from RAG chain WITH Langfuse tracing
-        if langfuse_handler:
-            answer = rag_chain.invoke(
-                request.question,
-                config={
-                    "callbacks": [langfuse_handler],
-                    "metadata": {
-                        "retrieval_k": k,
-                        "collection_name": collection_name,
-                        "endpoint": "/query"
+        # ========== ENHANCED TRACING ==========
+        if langfuse_handler and langfuse_client:
+            try:
+                # Create main trace
+                trace = langfuse_client.trace(
+                    name="rag-query-complete",
+                    input={"question": request.question, "k": k, "collection": collection_name},
+                    metadata={"endpoint": "/query", "user_agent": "streamlit-ui"}
+                )
+                
+                # Retrieval span
+                retrieval_span = trace.span(
+                    name="document-retrieval",
+                    input={"question": request.question, "k": k},
+                    metadata={"collection": collection_name}
+                )
+                
+                source_docs = retriever.invoke(request.question)
+                
+                retrieval_span.end(
+                    output={
+                        "num_chunks_retrieved": len(source_docs),
+                        "avg_chunk_length": sum(len(d.page_content) for d in source_docs) / len(source_docs) if source_docs else 0,
+                        "total_context_chars": sum(len(d.page_content) for d in source_docs)
                     }
-                }
-            )
+                )
+                
+                # Generation span
+                generation_span = trace.span(
+                    name="answer-generation",
+                    input={
+                        "question": request.question,
+                        "context_chunks": len(source_docs)
+                    }
+                )
+                
+                answer = rag_chain.invoke(
+                    request.question,
+                    config={"callbacks": [langfuse_handler]}
+                )
+                
+                generation_span.end(
+                    output={"answer": answer, "answer_length": len(answer)},
+                    metadata={"model": "gemini-2.5-flash"}
+                )
+                
+                # Complete trace
+                trace.update(
+                    output={"answer": answer, "chunks_used": len(source_docs)},
+                    tags=["rag", f"k-{k}", collection_name]
+                )
+            except Exception as trace_error:
+                # If tracing fails, continue without it
+                print(f"⚠ Tracing error (continuing): {trace_error}")
+                answer = rag_chain.invoke(request.question)
+                source_docs = retriever.invoke(request.question)
+            
         else:
-            # Fallback if Langfuse is not available
+            # Fallback without tracing
             answer = rag_chain.invoke(request.question)
+            source_docs = retriever.invoke(request.question)
         
-        # Get source chunks (will return exactly k chunks)
-        source_docs = retriever.invoke(request.question)
-        
-        # Format chunks
+        # Format response
         chunks = []
         for i, doc in enumerate(source_docs, 1):
             chunks.append({
@@ -254,7 +287,6 @@ async def query_rag(request: QueryRequest):
                 "metadata": doc.metadata,
                 "length": len(doc.page_content)
             })
-
         
         return QueryResponse(answer=answer, chunks=chunks)
         

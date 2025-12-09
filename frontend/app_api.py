@@ -74,7 +74,7 @@ if "pending_query" not in st.session_state:
 if "pending_session" not in st.session_state:
     st.session_state.pending_session = None
 if "current_collection" not in st.session_state:
-    st.session_state.current_collection = "my_docss"
+    st.session_state.current_collection = None  # Will be set from available collections
 if "available_collections" not in st.session_state:
     st.session_state.available_collections = []
 if "last_error" not in st.session_state:
@@ -96,7 +96,7 @@ def check_api_health():
     except:
         return False
 
-def query_api(question: str, collection_name: str = "my_docss", k: int = 3):
+def query_api(question: str, collection_name: str, k: int = 3):
     """Query the RAG system via API"""
     try:
         response = requests.post(
@@ -141,7 +141,7 @@ def check_ingestion_status_api(ingestion_id: str):
             "message": f"Failed to check status: {str(e)}"
         }
 
-def ingest_pdf_api(uploaded_file, collection_name: str = "my_docss", chunking_strategy: str = "semantic"):
+def ingest_pdf_api(uploaded_file, collection_name: str, chunking_strategy: str = "semantic"):
     """
     Ingest PDF via API - NOW RETURNS IMMEDIATELY with ingestion_id.
     OLD: Waited for completion
@@ -174,13 +174,15 @@ with st.sidebar:
     if collections:
         st.session_state.available_collections = [col["name"] for col in collections]
         
+        # Set current collection to first available if not set
+        if st.session_state.current_collection is None or st.session_state.current_collection not in st.session_state.available_collections:
+            st.session_state.current_collection = st.session_state.available_collections[0]
+        
         # Dropdown to select collection
         selected_collection = st.selectbox(
             "Select Collection",
             options=st.session_state.available_collections,
-            index=st.session_state.available_collections.index(st.session_state.current_collection) 
-                  if st.session_state.current_collection in st.session_state.available_collections 
-                  else 0,
+            index=st.session_state.available_collections.index(st.session_state.current_collection),
             key="collection_selector"
         )
         

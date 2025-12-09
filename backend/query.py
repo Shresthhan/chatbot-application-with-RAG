@@ -27,9 +27,9 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 
 # 1. LOAD EXISTING VECTOR DB
-def load_vectordb():
-    """Load the Chroma vector database we created (default collection)"""
-    return load_vectordb_with_collection(COLLECTION_NAME)
+def load_vectordb(collection_name="default"):
+    """Load the Chroma vector database with specified collection"""
+    return load_vectordb_with_collection(collection_name)
 
 
 def load_vectordb_with_collection(collection_name: str):

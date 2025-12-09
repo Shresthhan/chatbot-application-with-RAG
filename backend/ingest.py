@@ -16,7 +16,6 @@ import os
 # For UI-based ingestion, use the ingest_document() function instead
 PDF_PATH = "data/Conference_paper_pdf .pdf"  # Only used when running this file directly
 CHROMA_PATH = "./Vector_DB"
-COLLECTION_NAME = "my_docss"
 
 # 3. LOAD DOCUMENT 
 def load_document(file_path):
@@ -76,17 +75,15 @@ def get_embeddings():
     return embeddings
 
 # 6. STORE IN VECTOR DB 
-def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name=None):
+def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name="default"):
     """Store chunks in Chroma vector database
     
     Args:
         chunks: Document chunks to store
         embeddings: Embeddings instance
         append_mode: If True, append to existing database. If False, create new database.
-        collection_name: Name of the collection (defaults to COLLECTION_NAME)
+        collection_name: Name of the collection (required)
     """
-    if collection_name is None:
-        collection_name = COLLECTION_NAME
     
     print(f"Storing chunks in collection '{collection_name}' at {CHROMA_PATH}...")
     
@@ -112,18 +109,19 @@ def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name=Non
     return vectordb
 
 # 6.5. INGEST DOCUMENT (FOR UI)
-def ingest_document(file_path, append_mode=True, progress_callback=None):
-    """Complete ingestion pipeline for a single document (default collection)
+def ingest_document(file_path, collection_name, append_mode=True, progress_callback=None):
+    """Complete ingestion pipeline for a single document
     
     Args:
         file_path: Path to the PDF file to ingest
+        collection_name: Name of the collection (required)
         append_mode: If True, append to existing database. If False, replace database.
         progress_callback: Optional callback function to report progress (receives message string)
     
     Returns:
         tuple: (vectordb, num_chunks) - The vector database and number of chunks created
     """
-    return ingest_document_to_collection(file_path, COLLECTION_NAME, append_mode, progress_callback)
+    return ingest_document_to_collection(file_path, collection_name, append_mode, progress_callback)
 
 def ingest_document_to_collection(file_path, collection_name, append_mode=True, progress_callback=None, chunking_strategy="semantic"):
     """Ingest a document into a specific collection
