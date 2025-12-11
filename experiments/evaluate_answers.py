@@ -41,18 +41,18 @@ Return ONLY three numbers separated by commas (correctness, completeness, releva
 Example: 0.9, 0.8, 1.0"""
 
     try:
-        # Call Cerebras API directly (using requests since SDK might have import issues)
         response = requests.post(
-            "https://api.cerebras.ai/v1/chat/completions",
+            "https://api.cerebras.ai/v1/chat/completions",  
             headers={
                 "Authorization": f"Bearer {CEREBRAS_API_KEY}",
                 "Content-Type": "application/json"
             },
             json={
-                "model": "qwen-3-235b",  
+                "model": "llama3.3-70b",  
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0,
-                "max_tokens": 50
+                "max_tokens": 50,
+                "stream": False
             },
             timeout=30
         )
@@ -72,9 +72,15 @@ Example: 0.9, 0.8, 1.0"""
             }
     except Exception as e:
         print(f"Warning: Evaluation failed - {e}")
-        pass
+        # Print full response for debugging
+        try:
+            print(f"Response status: {response.status_code}")
+            print(f"Response body: {response.text}")
+        except:
+            pass
     
     return {"correctness": 0.5, "completeness": 0.5, "relevance": 0.5, "overall": 0.5}
+
 
 def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
     """Evaluate complete RAG pipeline"""
