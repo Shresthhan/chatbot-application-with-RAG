@@ -1,14 +1,13 @@
-# query_simple.py - Simple RAG query (no agent yet)
+# query.py - Simple RAG query with Groq LLM
 
 import warnings
 warnings.filterwarnings("ignore")
 
 import os
 from dotenv import load_dotenv
-
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -22,15 +21,12 @@ langfuse_handler = CallbackHandler()
 
 # Configuration
 CHROMA_PATH = "./Vector_DB"
-COLLECTION_NAME = "my_docss"
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # 1. LOAD EXISTING VECTOR DB
-def load_vectordb(collection_name="default"):
+def load_vectordb(collection_name):
     """Load the Chroma vector database with specified collection"""
     return load_vectordb_with_collection(collection_name)
-
 
 def load_vectordb_with_collection(collection_name: str):
     """Load a specific collection from the vector database"""
@@ -45,19 +41,18 @@ def load_vectordb_with_collection(collection_name: str):
         embedding_function=embeddings,
         collection_name=collection_name
     )
+    
     return vectordb
-
 
 # 2. SETUP LLM
 def get_llm():
-    """Initialize Google Gemini LLM"""
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=GOOGLE_API_KEY,
+    """Initialize Groq LLM for fast generation"""
+    llm = ChatGroq(
+        model="llama-3.1-8b-instant",  # Fast, efficient model
+        groq_api_key=GROQ_API_KEY,
         temperature=0.3
     )
     return llm
-
 
 # 3. CREATE RAG CHAIN
 def create_rag_chain(vectordb, llm, k=3):
@@ -71,16 +66,16 @@ def create_rag_chain(vectordb, llm, k=3):
     retriever = vectordb.as_retriever(search_kwargs={"k": k})
     
     # Define the prompt template
-    template = """You are a helpful research assistant. 
+    template = """You are a helpful research assistant.
 
-    IMPORTANT: If the user's message is a greeting (like "hi", "hello", "hey", "how are you"), 
-    respond warmly and naturally WITHOUT referring to any context. Ask how you can help them.
-    
-    For actual questions:
-    - Use the following context from the research paper to answer the question
-    - If the answer is in the context, provide a detailed response
-    - If not explicitly stated but related information exists, provide what you can infer
-    - If the context is not relevant to the question, say so clearly
+IMPORTANT: If the user's message is a greeting (like "hi", "hello", "hey", "how are you"),
+respond warmly and naturally WITHOUT referring to any context. Ask how you can help them.
+
+For actual questions:
+- Use the following context from the research paper to answer the question
+- If the answer is in the context, provide a detailed response
+- If not explicitly stated but related information exists, provide what you can infer
+- If the context is not relevant to the question, say so clearly
 
 Context:
 {context}
@@ -104,18 +99,17 @@ Answer:"""
     
     return rag_chain, retriever
 
-
 # 4. ASK QUESTIONS
-def ask_question(rag_chain, retriever, question, k=3):
+def ask_question(rag_chain, retriever, question, collection_name, k=3):
     """Query the RAG system with Langfuse tracing
     
     Args:
         rag_chain: The RAG chain to invoke
         retriever: The retriever instance
         question: User's question
+        collection_name: Name of the collection being queried
         k: Number of chunks retrieved (for metadata)
     """
-    
     # Get the answer with Langfuse tracing
     answer = rag_chain.invoke(
         question,
@@ -123,7 +117,7 @@ def ask_question(rag_chain, retriever, question, k=3):
             "callbacks": [langfuse_handler],
             "metadata": {
                 "retrieval_k": k,
-                "collection": COLLECTION_NAME
+                "collection": collection_name
             }
         }
     )
@@ -134,14 +128,25 @@ def ask_question(rag_chain, retriever, question, k=3):
     print(f"Answer: {answer}\n")
     return answer
 
-
 def main():
     print("=== RAG Query System ===\n")
     
+    # Prompt user for collection name
+    collection_name = input("Enter collection name: ").strip()
+    
+    if not collection_name:
+        print("Error: Collection name is required!")
+        return
+    
     # Setup
-    vectordb = load_vectordb()
-    llm = get_llm()
-    rag_chain, retriever = create_rag_chain(vectordb, llm)
+    try:
+        vectordb = load_vectordb(collection_name)
+        llm = get_llm()
+        rag_chain, retriever = create_rag_chain(vectordb, llm)
+        print(f"✓ Loaded collection: {collection_name}\n")
+    except Exception as e:
+        print(f"Error loading collection '{collection_name}': {e}")
+        return
     
     print("(Type 'exit' or 'quit' to stop)\n")
     
@@ -161,9 +166,8 @@ def main():
             continue
         
         # Ask the question
-        ask_question(rag_chain, retriever, question)
+        ask_question(rag_chain, retriever, question, collection_name)
         print("-" * 50)
-
 
 if __name__ == "__main__":
     main()

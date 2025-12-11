@@ -14,7 +14,6 @@ from datetime import datetime
 from langfuse.langchain import CallbackHandler
 from langfuse import Langfuse
 
-
 # Import our new database functions
 from backend.database import (
     init_db, 
@@ -84,7 +83,6 @@ class CollectionInfo(BaseModel):
 
 class CollectionsResponse(BaseModel):
     collections: List[CollectionInfo]
-    
 
 class IngestStartResponse(BaseModel):
     """
@@ -95,7 +93,6 @@ class IngestStartResponse(BaseModel):
     ingestion_id: str
     message: str
     status: str  # Will be "pending"
-
 
 class StatusResponse(BaseModel):
     """
@@ -111,7 +108,6 @@ class StatusResponse(BaseModel):
     error: Optional[str] = None
     started_at: str
     completed_at: Optional[str] = None
-
 
 # Helper function to initialize RAG system for a specific collection
 def initialize_rag_system(collection_name: str):
@@ -190,10 +186,10 @@ async def health_check():
         total_chunks=total_chunks
     )
 
-# Query endpoint
+# Query endpoint - SOLUTION 3 INTEGRATED
 @app.post("/query", response_model=QueryResponse)
 async def query_rag(request: QueryRequest):
-    """Query the RAG system with detailed tracing"""
+    """Query the RAG system with simplified Langfuse tracing"""
     collection_name = request.collection_name
     k = request.k
     
@@ -216,67 +212,22 @@ async def query_rag(request: QueryRequest):
         llm = get_llm()
         rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
         
-        # ========== ENHANCED TRACING ==========
-        if langfuse_handler and langfuse_client:
-            try:
-                # Create main trace
-                trace = langfuse_client.trace(
-                    name="rag-query-complete",
-                    input={"question": request.question, "k": k, "collection": collection_name},
-                    metadata={"endpoint": "/query", "user_agent": "streamlit-ui"}
-                )
-                
-                # Retrieval span
-                retrieval_span = trace.span(
-                    name="document-retrieval",
-                    input={"question": request.question, "k": k},
-                    metadata={"collection": collection_name}
-                )
-                
-                source_docs = retriever.invoke(request.question)
-                
-                retrieval_span.end(
-                    output={
-                        "num_chunks_retrieved": len(source_docs),
-                        "avg_chunk_length": sum(len(d.page_content) for d in source_docs) / len(source_docs) if source_docs else 0,
-                        "total_context_chars": sum(len(d.page_content) for d in source_docs)
-                    }
-                )
-                
-                # Generation span
-                generation_span = trace.span(
-                    name="answer-generation",
-                    input={
-                        "question": request.question,
-                        "context_chunks": len(source_docs)
-                    }
-                )
-                
-                answer = rag_chain.invoke(
-                    request.question,
-                    config={"callbacks": [langfuse_handler]}
-                )
-                
-                generation_span.end(
-                    output={"answer": answer, "answer_length": len(answer)},
-                    metadata={"model": "gemini-2.5-flash"}
-                )
-                
-                # Complete trace
-                trace.update(
-                    output={"answer": answer, "chunks_used": len(source_docs)},
-                    tags=["rag", f"k-{k}", collection_name]
-                )
-            except Exception as trace_error:
-                # If tracing fails, continue without it
-                print(f"⚠ Tracing error (continuing): {trace_error}")
-                answer = rag_chain.invoke(request.question)
-                source_docs = retriever.invoke(request.question)
-            
-        else:
-            # Fallback without tracing
-            answer = rag_chain.invoke(request.question)
-            source_docs = retriever.invoke(request.question)
+        # Simple tracing with callback handler
+        source_docs = retriever.invoke(request.question)
+        
+        config = {
+            "callbacks": [langfuse_handler] if langfuse_handler else [],
+            "metadata": {
+                "retrieval_k": k,
+                "collection": collection_name,
+                "endpoint": "streamlit_query",
+                "num_chunks": len(source_docs),
+                "model": "llama-3.1-8b-instant",
+                "provider": "groq"
+            }
+        }
+        
+        answer = rag_chain.invoke(request.question, config=config)
         
         # Format response
         chunks = []
@@ -292,8 +243,6 @@ async def query_rag(request: QueryRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
-
-    
 
 def process_ingestion_background(
     ingestion_id: str,
@@ -380,7 +329,6 @@ def process_ingestion_background(
                 os.remove(file_path)
             except:
                 pass
-
 
 # Ingest endpoint
 @app.post("/ingest", response_model=IngestStartResponse)
@@ -475,7 +423,6 @@ async def ingest_pdf(
                 pass
         raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")
 
-
 @app.get("/status/{ingestion_id}", response_model=StatusResponse)
 async def check_status(
     ingestion_id: str,
@@ -505,29 +452,6 @@ async def check_status(
     
     # Convert database object to response format and return
     return StatusResponse(**job.to_dict())
-
-
-# @app.get("/ingestions") #(optional, for admin/debugging)
-# async def list_all_ingestions(
-#     limit: int = 50,
-#     db: Session = Depends(get_db)
-# ):
-#     """
-#     NEW ENDPOINT - List all ingestion jobs (most recent first).
-    
-#     Useful for:
-#     - Seeing all past ingestions
-#     - Debugging
-#     - Admin dashboard
-    
-#     Example: GET /ingestions?limit=20
-#     """
-#     jobs = list_ingestion_jobs(db, limit=limit)
-#     return {
-#         "total": len(jobs),
-#         "ingestions": [job.to_dict() for job in jobs]
-#     }
-
 
 # List collections endpoint
 @app.get("/collections", response_model=CollectionsResponse)
@@ -592,21 +516,18 @@ async def delete_database(collection_name: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"Failed to delete: {str(e)}")
 
 # Root endpoint
-# REPLACE your @app.get("/") endpoint's return statement
-
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
     return {
         "message": "RAG Chatbot API with Multi-Collection Support",
-        "version": "2.0.0",  # Keep same or bump to 2.1.0
+        "version": "2.0.0",
         "endpoints": {
             "health": "GET /health",
             "collections": "GET /collections",
             "query": "POST /query (with collection_name)",
-            "ingest": "POST /ingest (returns ingestion_id)",  # Changed description
-            "status": "GET /status/{ingestion_id} - NEW!",     # NEW
-            "ingestions": "GET /ingestions - NEW!",            # NEW
+            "ingest": "POST /ingest (returns ingestion_id)",
+            "status": "GET /status/{ingestion_id}",
             "delete_collection": "DELETE /database?collection_name=name",
             "delete_all": "DELETE /database"
         }
