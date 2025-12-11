@@ -2,12 +2,13 @@
 Evaluate complete RAG answers using LLM as judge
 Optimized setup:
 - Groq with Llama 3.1 8B (imported from query.py for RAG)
-- Cerebras with Qwen 3 235B (for HIGH QUALITY evaluation)
+- Cerebras with llama3.3-70b (for HIGH QUALITY evaluation)
 """
 import os
 import sys
 from dotenv import load_dotenv
 from langfuse import Langfuse
+import uuid
 
 # Fix import path - add parent directory
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +22,7 @@ load_dotenv()
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 
 def evaluate_answer_quality(answer: str, expected: str, question: str):
-    """Use Cerebras (Qwen 3 235B) as judge to score answer quality"""
+    """Use Cerebras (llama3.3-70b) as judge to score answer quality"""
     import requests
     
     prompt = f"""You are evaluating RAG system answer quality.
@@ -72,18 +73,11 @@ Example: 0.9, 0.8, 1.0"""
             }
     except Exception as e:
         print(f"Warning: Evaluation failed - {e}")
-        # Print full response for debugging
-        try:
-            print(f"Response status: {response.status_code}")
-            print(f"Response body: {response.text}")
-        except:
-            pass
     
     return {"correctness": 0.5, "completeness": 0.5, "relevance": 0.5, "overall": 0.5}
 
-
 def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
-    """Evaluate complete RAG pipeline"""
+    """Evaluate complete RAG pipeline with automatic Langfuse logging"""
     print("=" * 70)
     print("RAG ANSWER QUALITY EVALUATION")
     print("=" * 70)
@@ -95,6 +89,7 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
         items = dataset.items
         print(f"Dataset: {len(items)} questions")
         print(f"Using: k={k}")
+        print(f"Logging to Langfuse automatically...")
         print()
     except Exception as e:
         print(f"Error: {e}")
@@ -102,7 +97,7 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
     
     # Reuse components from query.py (Groq for generation)
     vectordb = load_vectordb(collection_name)
-    llm = get_llm()  # Returns Groq with llama-3.1-8b-instant
+    llm = get_llm()
     rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
     
     # Evaluate each question
@@ -115,18 +110,65 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
         print(f"Q{i:2d}: {question[:60]}...")
         
         try:
-            # Generate answer using RAG chain (Groq)
+            # Create a unique trace_id for this evaluation
+            trace_id = f"eval_{dataset_name}_{i}_{str(uuid.uuid4())[:8]}"
+            
+            # Generate answer
             answer = rag_chain.invoke(question)
             
-            # Evaluate using Cerebras judge
+            # Evaluate
             scores = evaluate_answer_quality(answer, expected, question)
             all_scores.append(scores)
             
-            print(f"     Correctness: {scores['correctness']:.2f}")
-            print(f"     Completeness: {scores['completeness']:.2f}")
-            print(f"     Relevance: {scores['relevance']:.2f}")
-            print(f"     Overall: {scores['overall']:.2f}")
-            print()
+            # ========== LOG SCORES TO LANGFUSE ==========
+            try:
+                # Create scores using the correct method
+                langfuse.create_score(
+                    trace_id=trace_id,
+                    name="correctness",
+                    value=scores["correctness"],
+                    data_type="NUMERIC",
+                    comment=f"Q{i}: {question[:40]}..."
+                )
+                
+                langfuse.create_score(
+                    trace_id=trace_id,
+                    name="completeness",
+                    value=scores["completeness"],
+                    data_type="NUMERIC",
+                    comment=f"Q{i}: Answer completeness"
+                )
+                
+                langfuse.create_score(
+                    trace_id=trace_id,
+                    name="relevance",
+                    value=scores["relevance"],
+                    data_type="NUMERIC",
+                    comment=f"Q{i}: Question relevance"
+                )
+                
+                langfuse.create_score(
+                    trace_id=trace_id,
+                    name="overall_quality",
+                    value=scores["overall"],
+                    data_type="NUMERIC",
+                    comment=f"Q{i}: Overall evaluation score"
+                )
+                
+                print(f"     Correctness: {scores['correctness']:.2f}")
+                print(f"     Completeness: {scores['completeness']:.2f}")
+                print(f"     Relevance: {scores['relevance']:.2f}")
+                print(f"     Overall: {scores['overall']:.2f}")
+                print(f"     ✓ Logged to Langfuse (trace: {trace_id})")
+                print()
+                
+            except Exception as score_error:
+                print(f"     Correctness: {scores['correctness']:.2f}")
+                print(f"     Completeness: {scores['completeness']:.2f}")
+                print(f"     Relevance: {scores['relevance']:.2f}")
+                print(f"     Overall: {scores['overall']:.2f}")
+                print(f"     ⚠ Langfuse logging failed: {score_error}")
+                print()
             
         except Exception as e:
             print(f"     ERROR: {e}")
@@ -143,6 +185,44 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
     avg_relevance = sum(s["relevance"] for s in all_scores) / len(all_scores)
     avg_overall = sum(s["overall"] for s in all_scores) / len(all_scores)
     
+    # Log summary scores
+    try:
+        summary_trace_id = f"eval_summary_{dataset_name}_{str(uuid.uuid4())[:8]}"
+        
+        langfuse.create_score(
+            trace_id=summary_trace_id,
+            name="avg_correctness",
+            value=avg_correctness,
+            data_type="NUMERIC",
+            comment=f"Average across {len(items)} questions - {dataset_name}"
+        )
+        
+        langfuse.create_score(
+            trace_id=summary_trace_id,
+            name="avg_completeness",
+            value=avg_completeness,
+            data_type="NUMERIC",
+            comment=f"Average across {len(items)} questions"
+        )
+        
+        langfuse.create_score(
+            trace_id=summary_trace_id,
+            name="avg_relevance",
+            value=avg_relevance,
+            data_type="NUMERIC",
+            comment=f"Average across {len(items)} questions"
+        )
+        
+        langfuse.create_score(
+            trace_id=summary_trace_id,
+            name="avg_overall",
+            value=avg_overall,
+            data_type="NUMERIC",
+            comment=f"Overall evaluation: {dataset_name} (k={k})"
+        )
+    except Exception as e:
+        print(f"\n⚠ Could not log summary to Langfuse: {e}")
+    
     print("=" * 70)
     print("SUMMARY")
     print("=" * 70)
@@ -156,6 +236,10 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
     print("  - RAG Generation: Groq (llama-3.1-8b-instant) - Fast")
     print("  - Evaluation: Cerebras (llama3.3-70b) - High Quality")
     print("=" * 70)
+    
+    # Flush to ensure all data is sent
+    langfuse.flush()
+    print("\n✓ All scores flushed to Langfuse")
     
     return all_scores
 

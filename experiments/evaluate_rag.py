@@ -1,6 +1,5 @@
 """
-Simple RAG Evaluation - No Langfuse complexity
-Just calculates retrieval relevance scores and prints results
+Simple RAG Evaluation - 
 """
 
 import os
@@ -120,11 +119,6 @@ def run_evaluation(dataset_name: str, collection_name: str):
     print("=" * 70)
     print(f"Recommended k: {best_k[0]} (average score {best_k[1]['average']:.3f})")
     print("=" * 70)
-    print()
-    print("Next steps:")
-    print("  1. Update frontend/app_api.py (retrieval_k default) to this k value.")
-    print("  2. Restart the Streamlit app.")
-    print("  3. Manually verify answer quality with this setting.")
     print()
 
     return all_results
