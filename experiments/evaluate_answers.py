@@ -21,11 +21,26 @@ load_dotenv()
 
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 
-def evaluate_answer_quality(answer: str, expected: str, question: str):
-    """Use Cerebras (llama3.3-70b) as judge to score answer quality"""
+
+def evaluate_answer_quality(answer: str, question: str, expected: str = None):
+    """
+    Use Cerebras (llama3.3-70b) as judge to score answer quality
+    
+    Args:
+        answer: The generated answer to evaluate
+        question: The original question
+        expected: (Optional) Expected/ground truth answer for comparison
+    
+    Returns:
+        dict: Scores for correctness, completeness, relevance, and overall
+    """
     import requests
     
-    prompt = f"""You are evaluating RAG system answer quality.
+    # ========== TWO DIFFERENT PROMPTS ==========
+    
+    if expected:
+        # BATCH MODE: Compare against expected answer
+        prompt = f"""You are evaluating RAG system answer quality.
 
 Question: {question}
 
@@ -34,9 +49,25 @@ Expected Answer: {expected}
 Actual Answer: {answer}
 
 Rate the actual answer on these criteria (0.0 to 1.0 for each):
-1. CORRECTNESS: Are the facts accurate?
+1. CORRECTNESS: Are the facts accurate compared to the expected answer?
 2. COMPLETENESS: Does it answer all parts of the question?
 3. RELEVANCE: Is it focused on the question?
+
+Return ONLY three numbers separated by commas (correctness, completeness, relevance).
+Example: 0.9, 0.8, 1.0"""
+    
+    else:
+        # LIVE MODE: Evaluate without ground truth
+        prompt = f"""You are evaluating a RAG system's answer quality WITHOUT a ground truth reference.
+
+Question: {question}
+
+Answer: {answer}
+
+Rate the answer on these criteria (0.0 to 1.0 for each):
+1. CORRECTNESS: Does the answer appear factually sound and coherent? (Check for logical consistency, no contradictions)
+2. COMPLETENESS: Does it thoroughly address all aspects of the question?
+3. RELEVANCE: Is the answer directly related to what was asked?
 
 Return ONLY three numbers separated by commas (correctness, completeness, relevance).
 Example: 0.9, 0.8, 1.0"""
@@ -74,12 +105,47 @@ Example: 0.9, 0.8, 1.0"""
     except Exception as e:
         print(f"Warning: Evaluation failed - {e}")
     
+    # Fallback scores
     return {"correctness": 0.5, "completeness": 0.5, "relevance": 0.5, "overall": 0.5}
 
+
+def evaluate_single_live_answer(question: str, answer: str):
+    """
+    NEW FUNCTION: Evaluate a single answer in real-time (no expected answer needed)
+    This is for live chat evaluation!
+    
+    Args:
+        question: User's question
+        answer: RAG system's answer
+    
+    Returns:
+        dict: Evaluation scores
+    """
+    print(f"\n🔍 Evaluating live answer...")
+    print(f"Question: {question[:60]}...")
+    
+    scores = evaluate_answer_quality(
+        answer=answer,
+        question=question,
+        expected=None  # No ground truth for live evaluation
+    )
+    
+    print(f"✓ Evaluation complete!")
+    print(f"  Correctness:  {scores['correctness']:.2f}")
+    print(f"  Completeness: {scores['completeness']:.2f}")
+    print(f"  Relevance:    {scores['relevance']:.2f}")
+    print(f"  Overall:      {scores['overall']:.2f}\n")
+    
+    return scores
+
+
 def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
-    """Evaluate complete RAG pipeline with automatic Langfuse logging"""
+    """
+    BATCH EVALUATION: Evaluate complete RAG pipeline with automatic Langfuse logging
+    Uses a dataset with expected answers
+    """
     print("=" * 70)
-    print("RAG ANSWER QUALITY EVALUATION")
+    print("RAG ANSWER QUALITY EVALUATION (BATCH MODE)")
     print("=" * 70)
     print()
     
@@ -116,13 +182,16 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
             # Generate answer
             answer = rag_chain.invoke(question)
             
-            # Evaluate
-            scores = evaluate_answer_quality(answer, expected, question)
+            # Evaluate (with expected answer for comparison)
+            scores = evaluate_answer_quality(
+                answer=answer,
+                question=question,
+                expected=expected  # Batch mode has ground truth
+            )
             all_scores.append(scores)
             
             # ========== LOG SCORES TO LANGFUSE ==========
             try:
-                # Create scores using the correct method
                 langfuse.create_score(
                     trace_id=trace_id,
                     name="correctness",
@@ -243,17 +312,35 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
     
     return all_scores
 
+
 if __name__ == "__main__":
     print("\nRAG Answer Quality Evaluation\n")
     
-    dataset_name = input("Dataset name: ").strip()
-    collection_name = input("Collection name: ").strip()
+    # Ask user which mode they want
+    mode = input("Mode? (1) Batch evaluation with dataset, (2) Single live evaluation: ").strip()
     
-    if not collection_name:
-        print("Error: Collection name is required!")
-        exit(1)
+    if mode == "2":
+        # LIVE MODE
+        print("\n=== Live Answer Evaluation ===\n")
+        question = input("Enter question: ").strip()
+        answer = input("Enter answer: ").strip()
         
-    k = int(input("k-value (default: 5): ").strip() or "5")
+        if question and answer:
+            scores = evaluate_single_live_answer(question, answer)
+            print("\nDone! This answer can be evaluated without a dataset.")
+        else:
+            print("Error: Both question and answer are required!")
     
-    print()
-    run_answer_evaluation(dataset_name, collection_name, k)
+    else:
+        # BATCH MODE (original functionality)
+        dataset_name = input("Dataset name: ").strip()
+        collection_name = input("Collection name: ").strip()
+        
+        if not collection_name:
+            print("Error: Collection name is required!")
+            exit(1)
+            
+        k = int(input("k-value (default: 5): ").strip() or "5")
+        
+        print()
+        run_answer_evaluation(dataset_name, collection_name, k)

@@ -7,12 +7,17 @@ from typing import List, Dict, Optional, Any
 from sqlalchemy.orm import Session
 import tempfile
 import os
+import sys
 import re
 import shutil
 import uuid
 from datetime import datetime
 from langfuse.langchain import CallbackHandler
 from langfuse import Langfuse
+
+# Now import the evaluation functions
+from experiments.evaluate_rag import run_evaluation
+from experiments.evaluate_answers import run_answer_evaluation
 
 # Import our new database functions
 from backend.database import (
@@ -108,6 +113,41 @@ class StatusResponse(BaseModel):
     error: Optional[str] = None
     started_at: str
     completed_at: Optional[str] = None
+    
+# ========== EVALUATION MODELS ==========
+class EvaluationRequest(BaseModel):
+    dataset_name: str
+    collection_name: str
+
+class RetrievalEvalResponse(BaseModel):
+    success: bool
+    results: Dict[int, Dict[str, Any]]
+    recommended_k: int
+
+class AnswerEvalRequest(BaseModel):
+    dataset_name: str
+    collection_name: str
+    k: int = 5
+
+class AnswerEvalResponse(BaseModel):
+    success: bool
+    scores: List[Dict[str, float]]
+    averages: Dict[str, float]
+
+# NEW: For single answer evaluation (live chat evaluation)
+class SingleAnswerEvalRequest(BaseModel):
+    question: str
+    answer: str
+    expected_answer: Optional[str] = None  # Optional, for when user doesn't have ground truth
+
+class SingleAnswerEvalResponse(BaseModel):
+    success: bool
+    correctness: float
+    completeness: float
+    relevance: float
+    overall: float
+    explanation: Optional[str] = None
+
 
 # Helper function to initialize RAG system for a specific collection
 def initialize_rag_system(collection_name: str):
@@ -514,6 +554,118 @@ async def delete_database(collection_name: Optional[str] = None):
             return {"success": True, "message": "Database deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete: {str(e)}")
+    
+# ========== EVALUATION ENDPOINTS ==========
+
+@app.post("/evaluate/retrieval", response_model=RetrievalEvalResponse)
+async def evaluate_retrieval_endpoint(request: EvaluationRequest):
+    """
+    Batch evaluation: Test retrieval quality across multiple k-values using a dataset.
+    """
+    try:
+        print(f"[EVAL] Starting retrieval evaluation: dataset={request.dataset_name}")
+        
+        results = run_evaluation(
+            dataset_name=request.dataset_name,
+            collection_name=request.collection_name
+        )
+        
+        if not results or len(results) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No results returned. Check if dataset '{request.dataset_name}' exists in Langfuse."
+            )
+        
+        best_k = max(results.items(), key=lambda x: x[1]['average'])[0]
+        print(f"[EVAL] Complete. Recommended k={best_k}")
+        
+        return RetrievalEvalResponse(
+            success=True,
+            results=results,
+            recommended_k=best_k
+        )
+        
+    except Exception as e:
+        print(f"[EVAL ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
+@app.post("/evaluate/answers", response_model=AnswerEvalResponse)
+async def evaluate_answers_endpoint(request: AnswerEvalRequest):
+    """
+    Batch evaluation: Test complete answer quality using LLM-as-judge on a dataset.
+    """
+    try:
+        print(f"[EVAL] Starting answer evaluation: dataset={request.dataset_name}, k={request.k}")
+        
+        scores = run_answer_evaluation(
+            dataset_name=request.dataset_name,
+            collection_name=request.collection_name,
+            k=request.k
+        )
+        
+        if not scores or len(scores) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No scores returned. Check dataset and collection."
+            )
+        
+        averages = {
+            "correctness": sum(s["correctness"] for s in scores) / len(scores),
+            "completeness": sum(s["completeness"] for s in scores) / len(scores),
+            "relevance": sum(s["relevance"] for s in scores) / len(scores),
+            "overall": sum(s["overall"] for s in scores) / len(scores)
+        }
+        
+        print(f"[EVAL] Complete. Overall: {averages['overall']:.3f}")
+        
+        return AnswerEvalResponse(
+            success=True,
+            scores=scores,
+            averages=averages
+        )
+        
+    except Exception as e:
+        print(f"[EVAL ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Answer evaluation failed: {str(e)}")
+
+
+@app.post("/evaluate/single", response_model=SingleAnswerEvalResponse)
+async def evaluate_single_answer(request: SingleAnswerEvalRequest):
+    """
+    Live evaluation: Evaluate a single Q&A pair using LLM-as-judge.
+    This is for evaluating individual chat responses in real-time.
+    """
+    try:
+        print(f"[EVAL] Evaluating single answer for question: {request.question[:50]}...")
+        
+        # Import the evaluation function
+        from experiments.evaluate_answers import evaluate_answer_quality
+        
+        # Evaluate the answer (expected is None for live evaluation)
+        scores = evaluate_answer_quality(
+            answer=request.answer,
+            question=request.question,
+            expected=request.expected_answer  # Will be None for live chat evaluation
+        )
+        
+        print(f"[EVAL] Single answer evaluated. Overall: {scores['overall']:.3f}")
+        
+        return SingleAnswerEvalResponse(
+            success=True,
+            correctness=scores['correctness'],
+            completeness=scores['completeness'],
+            relevance=scores['relevance'],
+            overall=scores['overall'],
+            explanation=f"Evaluated using LLM-as-judge (Cerebras llama3.3-70b)"
+        )
+        
+    except Exception as e:
+        print(f"[EVAL ERROR] {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Single answer evaluation failed: {str(e)}"
+        )
 
 # Root endpoint
 @app.get("/")
@@ -529,7 +681,10 @@ async def root():
             "ingest": "POST /ingest (returns ingestion_id)",
             "status": "GET /status/{ingestion_id}",
             "delete_collection": "DELETE /database?collection_name=name",
-            "delete_all": "DELETE /database"
+            "delete_all": "DELETE /database",
+            "evaluate_retrieval": "POST /evaluate/retrieval",  
+            "evaluate_answers": "POST /evaluate/answers",
+            "evaluate_single": "POST /evaluate/single"
         }
     }
 
