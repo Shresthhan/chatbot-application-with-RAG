@@ -204,15 +204,19 @@ def evaluate_answers_api(dataset_name: str, collection_name: str, k: int, progre
     except Exception as e:
         raise Exception(f"Answer evaluation failed: {str(e)}")
 
-def evaluate_single_answer_api(question: str, answer: str):
+def evaluate_single_answer_api(question: str, answer: str, trace_id: str = None):
     """Evaluate a single Q&A pair using LLM-as-judge"""
     try:
+        payload = {
+            "question": question,
+            "answer": answer
+        }
+        if trace_id:
+            payload["trace_id"] = trace_id
+            
         response = requests.post(
             f"{API_URL}/evaluate/single",
-            json={
-                "question": question,
-                "answer": answer
-            },
+            json=payload,
             timeout=60
         )
         response.raise_for_status()
@@ -782,7 +786,8 @@ try:
                             try:
                                 eval_result = evaluate_single_answer_api(
                                     question=user_question,
-                                    answer=message["content"]
+                                    answer=message["content"],
+                                    trace_id=message.get("trace_id")
                                 )
                                 st.session_state.answer_scores[eval_key] = eval_result
                                 st.rerun()
@@ -824,6 +829,7 @@ try:
                     result = query_api(query, st.session_state.current_collection, st.session_state.retrieval_k)
                     response = result["answer"]
                     source_chunks = result["chunks"]
+                    trace_id = result.get("trace_id")
                     st.session_state.last_error = None
                     st.session_state.last_query_k = st.session_state.retrieval_k
                     
@@ -849,7 +855,11 @@ try:
                 st.session_state.chat_chunks[st.session_state.current_session] = []
             st.session_state.chat_chunks[st.session_state.current_session].append(source_chunks)
             
-            current_messages.append({"role": "assistant", "content": response})
+            current_messages.append({
+                "role": "assistant", 
+                "content": response,
+                "trace_id": trace_id
+            })
             
             st.session_state.pending_query = None
             st.session_state.pending_session = None
