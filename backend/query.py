@@ -7,34 +7,54 @@ import os
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langfuse.langchain import CallbackHandler
+
+# Langfuse temporarily disabled - package version incompatibility
+CallbackHandler = None
+LANGFUSE_AVAILABLE = False
 
 # Load environment variables FIRST
 load_dotenv()
 
 # Initialize Langfuse handler
-langfuse_handler = CallbackHandler()
+if LANGFUSE_AVAILABLE:
+    langfuse_handler = CallbackHandler()
+else:
+    langfuse_handler = None
 
 # Configuration
 CHROMA_PATH = "./Vector_DB"
+QDRANT_PATH = "./Qdrant_DB"
+QDRANT_COLLECTION = "agent_knowledge"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# 1. LOAD EXISTING VECTOR DB
+# Global cache for embeddings
+_embeddings = None
+
+def get_embeddings():
+    """Shared embeddings instance to avoid multiple model loads"""
+    global _embeddings
+    if _embeddings is None:
+        print("Initializing HuggingFace embeddings (one-time setup)...")
+        _embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-mpnet-base-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+    return _embeddings
+
 def load_vectordb(collection_name):
     """Load the Chroma vector database with specified collection"""
     return load_vectordb_with_collection(collection_name)
 
 def load_vectordb_with_collection(collection_name: str):
     """Load a specific collection from the vector database"""
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2",
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
-    )
+    embeddings = get_embeddings()
     
     vectordb = Chroma(
         persist_directory=CHROMA_PATH,
@@ -43,6 +63,22 @@ def load_vectordb_with_collection(collection_name: str):
     )
     
     return vectordb
+
+def load_qdrant_vectordb(collection_name=QDRANT_COLLECTION):
+    """Load Qdrant vector database (for agent queries)"""
+    embeddings = get_embeddings()
+    
+    # Import shared client from ingest module
+    from backend.ingest import get_qdrant_client
+    client = get_qdrant_client()
+    
+    vectorstore = QdrantVectorStore(
+        client=client,
+        collection_name=collection_name,
+        embedding=embeddings
+    )
+    
+    return vectorstore
 
 # 2. SETUP LLM
 def get_llm():
@@ -68,14 +104,18 @@ def create_rag_chain(vectordb, llm, k=3):
     # Define the prompt template
     template = """You are a helpful research assistant.
 
-IMPORTANT: If the user's message is a greeting (like "hi", "hello", "hey", "how are you"),
+IMPORTANT: If the user's message is ONLY a greeting (like "hi", "hello", "how are you") with no actual question,
 respond warmly and naturally WITHOUT referring to any context. Ask how you can help them.
+
+If the user's message contains both a greeting AND a question (like "hey can you describe...", "hello, what is..."),
+ignore the greeting and focus on answering the question using the context.
 
 For actual questions:
 - Use the following context from the research paper to answer the question
 - If the answer is in the context, provide a detailed response
 - If not explicitly stated but related information exists, provide what you can infer
-- If the context is not relevant to the question, say so clearly
+- If the context is not relevant to the question, return EXACTLY: [NO_CONTEXT_FOUND]
+- If no context is provided at all, return EXACTLY: [NO_CONTEXT_FOUND]
 
 Context:
 {context}

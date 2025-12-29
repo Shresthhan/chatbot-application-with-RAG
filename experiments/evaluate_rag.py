@@ -6,7 +6,10 @@ import os
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from langfuse import Langfuse
+
+# Langfuse temporarily disabled - package version incompatibility
+Langfuse = None
+LANGFUSE_AVAILABLE = False
 
 load_dotenv()
 
@@ -58,6 +61,10 @@ def run_evaluation(dataset_name: str, collection_name: str):
     print()
 
     # Load dataset from Langfuse
+    if not LANGFUSE_AVAILABLE:
+        print("Error: Langfuse is not available. Cannot run evaluation.")
+        return {}
+    
     lf = Langfuse()
     try:
         dataset = lf.get_dataset(name=dataset_name)
@@ -66,7 +73,7 @@ def run_evaluation(dataset_name: str, collection_name: str):
         print()
     except Exception as e:
         print(f"Error loading dataset '{dataset_name}': {e}")
-        return
+        return {}
 
     k_values = [3, 5, 7, 10]
     all_results = {}

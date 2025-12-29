@@ -1,9 +1,11 @@
 # api.py - FastAPI backend for RAG system
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Optional, Any
+import json
+from typing import List, Dict, Optional, Any, AsyncGenerator
 from sqlalchemy.orm import Session
 import tempfile
 import os
@@ -12,8 +14,14 @@ import re
 import shutil
 import uuid
 from datetime import datetime
-from langfuse.langchain import CallbackHandler
-from langfuse import Langfuse
+
+# Try to import Langfuse, but make it optional to avoid blocking the app
+# Temporarily disabled - package version incompatibility
+# To enable: pip install "langfuse>=2.40.0,<3.0"
+CallbackHandler = None
+Langfuse = None
+LANGFUSE_AVAILABLE = False
+print("⚠ Langfuse temporarily disabled - reinstall with: pip install 'langfuse>=2.40.0,<3.0'")
 
 # Now import the evaluation functions
 from experiments.evaluate_rag import run_evaluation
@@ -33,6 +41,12 @@ from backend.database import (
 
 from backend.query import load_vectordb, get_llm, create_rag_chain
 from backend.ingest import ingest_document
+from backend.tools import web_search_tool
+import chromadb
+import asyncio
+from qdrant_client import QdrantClient
+# from tavily import TavilyClient  # Commented out until we implement the tavily integration
+ 
 
 # Initialize FastAPI app
 app = FastAPI(title="RAG Chatbot API", version="1.0.0")
@@ -52,14 +66,19 @@ retrievers = {}
 vectordbs = {}
 
 # Initialize Langfuse for observability
-try:
-    langfuse_handler = CallbackHandler()
-    langfuse_client = Langfuse()
-    print("✓ Langfuse initialized successfully")
-except Exception as e:
-    print(f"⚠ Langfuse initialization failed: {e}")
+if LANGFUSE_AVAILABLE:
+    try:
+        langfuse_handler = CallbackHandler()
+        langfuse_client = Langfuse()
+        print("✓ Langfuse initialized successfully")
+    except Exception as e:
+        print(f"⚠ Langfuse initialization failed: {e}")
+        langfuse_handler = None
+        langfuse_client = None
+else:
     langfuse_handler = None
     langfuse_client = None
+    print("⚠ Langfuse not available, running without observability")
 
 # Pydantic models
 class QueryRequest(BaseModel):
@@ -151,6 +170,21 @@ class SingleAnswerEvalResponse(BaseModel):
     explanation: Optional[str] = None
 
 
+def is_greeting(query: str) -> bool:
+    """Check if query is a simple greeting"""
+    greetings = {"hi", "hello", "hey", "howdy", "hola", "greetings", "wassup", "yo", "morning", "afternoon", "evening"}
+    words = query.lower().strip().strip("?!.").split()
+    if len(words) <= 2 and any(w in greetings for w in words):
+        return True
+    return False
+
+
+
+class AgentQueryRequest(BaseModel):
+    question: str
+    k: Optional[int] = 3
+
+
 # Helper function to initialize RAG system for a specific collection
 def initialize_rag_system(collection_name: str):
     """Initialize or reload the RAG system for a specific collection"""
@@ -176,37 +210,10 @@ def initialize_rag_system(collection_name: str):
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    """
-    Initialize database AND RAG system on startup.
-    
-    CHANGE: Added init_db() call to create database tables.
-    """
-    # NEW: Initialize database first
+    """Initialize database on startup. RAG collections will be loaded on demand."""
+    print("[STARTUP] Initializing database...")
     init_db()
-    
-    # Check if Vector_DB exists and has actual collections with documents
-    if os.path.exists("./Vector_DB"):
-        try:
-            import chromadb
-            client = chromadb.PersistentClient(path="./Vector_DB")
-            collections = client.list_collections()
-            
-            # Only initialize if there are collections with documents
-            if collections:
-                for col in collections:
-                    if col.count() > 0:  # Only load collections with documents
-                        try:
-                            initialize_rag_system(col.name)
-                            print(f"✓ RAG system initialized with collection: {col.name}")
-                        except Exception as e:
-                            print(f"⚠ Could not load collection {col.name}: {e}")
-                        break  # Load first non-empty collection
-            else:
-                print("⚠ No collections found. Upload documents first.")
-        except Exception as e:
-            print(f"⚠ Could not initialize RAG system: {e}")
-    else:
-        print("⚠ No vector database found. Upload documents first.")
+    print("✓ Database initialized")
 
 # Health check endpoint
 @app.get("/health", response_model=HealthResponse)
@@ -332,91 +339,30 @@ async def query_rag(request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
-def process_ingestion_background(
-    ingestion_id: str,
-    file_path: str,
-    collection_name: str,
-    chunking_strategy: str,
-    original_filename: str
-):
+
+# NEW: ReAct Agent with Qdrant + Web Search
+@app.post("/react_agent_query")
+async def react_agent_query(request: AgentQueryRequest):
     """
-    NEW FUNCTION - Runs ingestion in background (doesn't block user).
-    
-    This is the slow part (2-5 minutes) that used to block the /ingest endpoint.
-    Now it runs separately while user can do other things.
-    
-    Updates database as it progresses so user can check status.
+    ReAct Agent: Uses Qdrant DB first, falls back to web search.
+    Returns thought process, source, and answer.
     """
-    # Open NEW database connection (background tasks need their own)
-    db = SessionLocal()
-    
     try:
-        # Update status to PROCESSING
-        update_ingestion_job(
-            db, 
-            ingestion_id, 
-            status=IngestionStatus.PROCESSING,
-            message="Processing document...",
-            progress=20
-        )
+        from backend.agent import react_agent_qdrant
         
-        # Import ingestion function
-        from backend.ingest import ingest_document_to_collection
+        # Execute ReAct agent
+        result = react_agent_qdrant(request.question, k=request.k)
         
-        # Update progress
-        update_ingestion_job(
-            db,
-            ingestion_id,
-            message="Chunking document...",
-            progress=40
-        )
-        
-        # THE SLOW PART (2-5 minutes) - but user already got their response!
-        # Strip whitespace to ensure ChromaDB compatibility
-        collection_name = collection_name.strip()
-        
-        vectordb_result, num_chunks = ingest_document_to_collection(
-            file_path=file_path,
-            collection_name=collection_name,
-            append_mode=True,
-            chunking_strategy=chunking_strategy
-        )
-        
-        # Mark as COMPLETED
-        update_ingestion_job(
-            db,
-            ingestion_id,
-            status=IngestionStatus.COMPLETED,
-            message=f"Successfully ingested '{original_filename}'",
-            progress=100,
-            num_chunks=num_chunks,
-            completed_at=datetime.now()
-        )
-        
-        # Reload RAG system
-        initialize_rag_system(collection_name)
+        return {
+            "answer": result["answer"],
+            "source": result["source"],  # 'qdrant', 'web', or 'none'
+            "thought_process": result["thought_process"],
+            "chunks": result["chunks"],
+            "web_results": result["web_results"]
+        }
         
     except Exception as e:
-        # Mark as FAILED if anything goes wrong
-        update_ingestion_job(
-            db,
-            ingestion_id,
-            status=IngestionStatus.FAILED,
-            message="Ingestion failed",
-            error=str(e),
-            completed_at=datetime.now()
-        )
-    
-    finally:
-        # Always clean up
-        db.close()
-        
-        # Delete temp file
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except:
-                pass
+        raise HTTPException(status_code=500, detail=f"ReAct agent query failed: {str(e)}")
 
 # Ingest endpoint
 @app.post("/ingest", response_model=IngestStartResponse)
@@ -510,6 +456,501 @@ async def ingest_pdf(
             except:
                 pass
         raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")
+
+# NEW: Ingest to Qdrant (for agent knowledge base)
+@app.post("/ingest_qdrant")
+async def ingest_pdf_qdrant(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="PDF file to ingest into Qdrant"),
+    chunking_strategy: str = Form("semantic", description="semantic or fixed"),
+    db: Session = Depends(get_db)
+):
+    """
+    Ingest a PDF into Qdrant database (for agent queries).
+    This is separate from ChromaDB collections.
+    """
+    # Validate file type
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    
+    # Validate chunking strategy
+    if chunking_strategy not in ["semantic", "fixed"]:
+        raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
+    
+    # Generate unique ingestion ID
+    ingestion_id = str(uuid.uuid4())
+    
+    # Create temp file to save upload
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    temp_path = temp_file.name
+    temp_file.close()
+    
+    try:
+        # Save uploaded file to temp path
+        with open(temp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        # Create database record for tracking
+        create_ingestion_job(
+            db,
+            ingestion_id=ingestion_id,
+            collection_name="qdrant_agent_knowledge",  # Fixed name for Qdrant
+            chunking_strategy=chunking_strategy,
+            original_filename=file.filename,
+            status=IngestionStatus.PENDING
+        )
+        
+        # Start background task for Qdrant ingestion
+        background_tasks.add_task(
+            process_qdrant_ingestion_background,
+            ingestion_id,
+            temp_path,
+            chunking_strategy,
+            file.filename
+        )
+        
+        # Return immediately with ingestion ID
+        return IngestStartResponse(
+            ingestion_id=ingestion_id,
+            message=f"Qdrant ingestion started for '{file.filename}'",
+            status="pending"
+        )
+        
+    except Exception as e:
+        # Clean up temp file if error occurs before background task starts
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to start Qdrant ingestion: {str(e)}")
+
+# Background task function for Qdrant ingestion
+def process_qdrant_ingestion_background(
+    ingestion_id: str,
+    file_path: str,
+    chunking_strategy: str,
+    original_filename: str
+):
+    """Background task to ingest PDF into Qdrant"""
+    print(f"\n[BACKGROUND TASK] Starting Qdrant ingestion: {ingestion_id}")
+    print(f"[BACKGROUND TASK] File: {original_filename}")
+    print(f"[BACKGROUND TASK] Strategy: {chunking_strategy}")
+    
+    db = SessionLocal()
+    try:
+        # Update status to processing
+        print(f"[BACKGROUND TASK] Updating status to PROCESSING...")
+        update_ingestion_job(
+            db, 
+            ingestion_id, 
+            status=IngestionStatus.PROCESSING, 
+            message="Processing PDF and creating chunks...",
+            progress=10
+        )
+        
+        # Import here to avoid circular imports
+        from backend.ingest import ingest_document_to_qdrant
+        
+        # Perform ingestion
+        print(f"[BACKGROUND TASK] Starting document ingestion...")
+        update_ingestion_job(db, ingestion_id, progress=30, message="Ingesting document into Qdrant...")
+        qdrant_vectorstore, num_chunks = ingest_document_to_qdrant(
+            file_path=file_path,
+            chunking_strategy=chunking_strategy
+        )
+        
+        # Mark as completed
+        print(f"[BACKGROUND TASK] Ingestion successful! {num_chunks} chunks created")
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            status=IngestionStatus.COMPLETED,
+            message=f"Successfully ingested {num_chunks} chunks into Qdrant",
+            progress=100,
+            num_chunks=num_chunks
+        )
+        
+        print(f"✓ Qdrant ingestion {ingestion_id} completed: {num_chunks} chunks")
+        
+    except Exception as e:
+        # Mark as failed
+        error_message = str(e)
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(f"[BACKGROUND TASK] ERROR during ingestion:")
+        print(f"[BACKGROUND TASK] {traceback_str}")
+        
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            status=IngestionStatus.FAILED,
+            message=f"Ingestion failed: {error_message}",
+            progress=0,
+            error=traceback_str
+        )
+        print(f"❌ Qdrant ingestion {ingestion_id} failed: {error_message}")
+    
+    finally:
+        # Always clean up
+        db.close()
+        
+        # Delete temp file
+        if os.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
+
+def process_ingestion_background(
+    ingestion_id: str,
+    file_path: str,
+    collection_name: str,
+    chunking_strategy: str,
+    original_filename: str
+):
+    """
+    NEW FUNCTION - Runs ingestion in background (doesn't block user).
+    
+    This is the slow part (2-5 minutes) that used to block the /ingest endpoint.
+    Now it runs separately while user can do other things.
+    
+    Updates database as it progresses so user can check status.
+    """
+    # Open NEW database connection (background tasks need their own)
+    db = SessionLocal()
+    
+    try:
+        # Update status to PROCESSING
+        update_ingestion_job(
+            db, 
+            ingestion_id, 
+            status=IngestionStatus.PROCESSING,
+            message="Processing document...",
+            progress=20
+        )
+        
+        # Import ingestion function
+        from backend.ingest import ingest_document_to_collection
+        
+        # Update progress
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            message="Chunking document...",
+            progress=40
+        )
+        
+        # THE SLOW PART (2-5 minutes) - but user already got their response!
+        # Strip whitespace to ensure ChromaDB compatibility
+        collection_name = collection_name.strip()
+        
+        vectordb_result, num_chunks = ingest_document_to_collection(
+            file_path=file_path,
+            collection_name=collection_name,
+            append_mode=True,
+            chunking_strategy=chunking_strategy
+        )
+        
+        # Mark as COMPLETED
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            status=IngestionStatus.COMPLETED,
+            message=f"Successfully ingested '{original_filename}'",
+            progress=100,
+            num_chunks=num_chunks,
+            completed_at=datetime.now()
+        )
+        
+        # Reload RAG system
+        initialize_rag_system(collection_name)
+        
+    except Exception as e:
+        # Mark as FAILED if anything goes wrong
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            status=IngestionStatus.FAILED,
+            message="Ingestion failed",
+            error=str(e),
+            completed_at=datetime.now()
+        )
+    
+    finally:
+        # Always clean up
+        db.close()
+        
+        # Delete temp file
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
+
+# NEW: ReAct Agent with Qdrant + Web Search
+@app.post("/react_agent_query")
+async def react_agent_query(request: AgentQueryRequest):
+    """
+    ReAct Agent: Uses Qdrant DB first, falls back to web search.
+    Returns thought process, source, and answer.
+    """
+    try:
+        from backend.agent import react_agent_qdrant
+        
+        # Execute ReAct agent
+        result = react_agent_qdrant(request.question, k=request.k)
+        
+        return {
+            "answer": result["answer"],
+            "source": result["source"],  # 'qdrant', 'web', or 'none'
+            "thought_process": result["thought_process"],
+            "chunks": result["chunks"],
+            "web_results": result["web_results"]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ReAct agent query failed: {str(e)}")
+
+# Ingest endpoint
+@app.post("/ingest", response_model=IngestStartResponse)
+async def ingest_pdf(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="PDF file to ingest"),
+    collection_name: str = Form(..., description="Name of the collection"),
+    chunking_strategy: str = Form("semantic", description="semantic or fixed"),
+    db: Session = Depends(get_db)
+):
+    
+    # Step 1: Clean the input (remove extra spaces)
+    collection_name = collection_name.strip()
+    
+    # Step 2: Validate length
+    if len(collection_name) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Collection name must be at least 3 characters long"
+        )
+    
+    if len(collection_name) > 512:
+        raise HTTPException(
+            status_code=400,
+            detail="Collection name must be less than 512 characters"
+        )
+    
+    # Step 3: Validate format (must start/end with letter or number)
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$', collection_name):
+        raise HTTPException(
+            status_code=400,
+            detail="Collection name must start and end with a letter or number, "
+                   "and can only contain letters, numbers, dots (.), underscores (_), or hyphens (-)"
+        )
+    # ========== END VALIDATION BLOCK ==========
+    
+    # Validate file type (EXISTING CODE - DON'T CHANGE)
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    
+    # Validate chunking strategy (EXISTING CODE - DON'T CHANGE)
+    if chunking_strategy not in ["semantic", "fixed"]:
+        raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
+    
+    # NEW: Generate unique ingestion ID
+    ingestion_id = str(uuid.uuid4())
+    
+    # Create temp file to save upload
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    temp_path = temp_file.name
+    temp_file.close()
+    
+    try:
+        # Save uploaded file to temp path
+        with open(temp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        # Create database record for tracking
+        create_ingestion_job(
+            db,
+            ingestion_id=ingestion_id,
+            collection_name=collection_name,
+            chunking_strategy=chunking_strategy,
+            original_filename=file.filename,
+            status=IngestionStatus.PENDING
+        )
+        
+        # Start background task
+        background_tasks.add_task(
+            process_ingestion_background,
+            ingestion_id,
+            temp_path,
+            collection_name,
+            chunking_strategy,
+            file.filename
+        )
+        
+        # Return immediately with ingestion ID
+        return IngestStartResponse(
+            ingestion_id=ingestion_id,
+            message=f"Ingestion started for '{file.filename}'",
+            status="pending"
+        )
+        
+    except Exception as e:
+        # Clean up temp file if error occurs before background task starts
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")
+
+# NEW: Ingest to Qdrant (for agent knowledge base)
+@app.post("/ingest_qdrant")
+async def ingest_pdf_qdrant(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="PDF file to ingest into Qdrant"),
+    chunking_strategy: str = Form("semantic", description="semantic or fixed"),
+    db: Session = Depends(get_db)
+):
+    """
+    Ingest a PDF into Qdrant database (for agent queries).
+    This is separate from ChromaDB collections.
+    """
+    # Validate file type
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    
+    # Validate chunking strategy
+    if chunking_strategy not in ["semantic", "fixed"]:
+        raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
+    
+    # Generate unique ingestion ID
+    ingestion_id = str(uuid.uuid4())
+    
+    # Create temp file to save upload
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    temp_path = temp_file.name
+    temp_file.close()
+    
+    try:
+        # Save uploaded file to temp path
+        with open(temp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        # Create database record for tracking
+        create_ingestion_job(
+            db,
+            ingestion_id=ingestion_id,
+            collection_name="qdrant_agent_knowledge",  # Fixed name for Qdrant
+            chunking_strategy=chunking_strategy,
+            original_filename=file.filename,
+            status=IngestionStatus.PENDING
+        )
+        
+        # Start background task for Qdrant ingestion
+        background_tasks.add_task(
+            process_qdrant_ingestion_background,
+            ingestion_id,
+            temp_path,
+            chunking_strategy,
+            file.filename
+        )
+        
+        # Return immediately with ingestion ID
+        return IngestStartResponse(
+            ingestion_id=ingestion_id,
+            message=f"Qdrant ingestion started for '{file.filename}'",
+            status="pending"
+        )
+        
+    except Exception as e:
+        # Clean up temp file if error occurs before background task starts
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to start Qdrant ingestion: {str(e)}")
+
+# Background task function for Qdrant ingestion
+def process_qdrant_ingestion_background(
+    ingestion_id: str,
+    file_path: str,
+    chunking_strategy: str,
+    original_filename: str
+):
+    """Background task to ingest PDF into Qdrant"""
+    print(f"\n[BACKGROUND TASK] Starting Qdrant ingestion: {ingestion_id}")
+    print(f"[BACKGROUND TASK] File: {original_filename}")
+    print(f"[BACKGROUND TASK] Strategy: {chunking_strategy}")
+    
+    db = SessionLocal()
+    try:
+        # Update status to processing
+        print(f"[BACKGROUND TASK] Updating status to PROCESSING...")
+        update_ingestion_job(
+            db, 
+            ingestion_id, 
+            status=IngestionStatus.PROCESSING, 
+            message="Processing PDF and creating chunks...",
+            progress=10
+        )
+        
+        # Import here to avoid circular imports
+        from backend.ingest import ingest_document_to_qdrant
+        
+        # Perform ingestion
+        print(f"[BACKGROUND TASK] Starting document ingestion...")
+        update_ingestion_job(db, ingestion_id, progress=30, message="Ingesting document into Qdrant...")
+        qdrant_vectorstore, num_chunks = ingest_document_to_qdrant(
+            file_path=file_path,
+            chunking_strategy=chunking_strategy
+        )
+        
+        # Mark as completed
+        print(f"[BACKGROUND TASK] Ingestion successful! {num_chunks} chunks created")
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            status=IngestionStatus.COMPLETED,
+            message=f"Successfully ingested {num_chunks} chunks into Qdrant",
+            progress=100,
+            num_chunks=num_chunks
+        )
+        
+        print(f"✓ Qdrant ingestion {ingestion_id} completed: {num_chunks} chunks")
+        
+    except Exception as e:
+        # Mark as failed
+        error_message = str(e)
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(f"[BACKGROUND TASK] ERROR during ingestion:")
+        print(f"[BACKGROUND TASK] {traceback_str}")
+        
+        update_ingestion_job(
+            db,
+            ingestion_id,
+            status=IngestionStatus.FAILED,
+            message=f"Ingestion failed: {error_message}",
+            progress=0,
+            error=traceback_str
+        )
+        print(f"❌ Qdrant ingestion {ingestion_id} failed: {error_message}")
+    
+    finally:
+        # Always clean up
+        db.close()
+        
+        # Delete temp file
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
 
 @app.get("/status/{ingestion_id}", response_model=StatusResponse)
 async def check_status(

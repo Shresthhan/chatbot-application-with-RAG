@@ -8,14 +8,33 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+from langchain_groq import ChatGroq
 import shutil
 import os
+import json
+import uuid
 
 # 2. CONFIGURATION 
 # Note: PDF_PATH is kept for manual ingestion via CLI (python ingest.py)
 # For UI-based ingestion, use the ingest_document() function instead
 PDF_PATH = "data/Conference_paper_pdf .pdf"  # Only used when running this file directly
 CHROMA_PATH = "./Vector_DB"
+QDRANT_PATH = "./Qdrant_DB"
+QDRANT_COLLECTION = "agent_knowledge"  # Single collection for agent queries
+
+# Global Qdrant client (singleton to avoid concurrent access issues)
+_qdrant_client = None
+
+def get_qdrant_client():
+    """Get or create the shared Qdrant client instance"""
+    global _qdrant_client
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(path=QDRANT_PATH)
+        print("✓ Initialized shared Qdrant client")
+    return _qdrant_client
 
 # 3. LOAD DOCUMENT 
 def load_document(file_path):
@@ -74,6 +93,32 @@ def get_embeddings():
     )
     return embeddings
 
+# 5.5. SUMMARIZE DOCUMENT
+def summarize_document(chunks):
+    """Generate a one-sentence summary of the document using the first few chunks"""
+    try:
+        from backend.query import get_llm
+        llm = get_llm()
+        
+        # Take first 3 chunks for context (cap at 4000 chars)
+        context = "\n\n".join([c.page_content for c in chunks[:3]])[:4000]
+        
+        prompt = f"""Analyze the following document snippets and provide a one-sentence summary (max 20 words) 
+of what this document is about. Be specific (e.g., "Research paper about AI in healthcare", "Sales report for Q3 2023").
+
+Snippets:
+{context}
+
+Summary:"""
+        
+        response = llm.invoke(prompt)
+        summary = response.content.strip().strip('"').strip("'")
+        print(f"✓ Generated summary: {summary}")
+        return summary
+    except Exception as e:
+        print(f"⚠ Could not generate summary: {e}")
+        return "No description available"
+
 # 6. STORE IN VECTOR DB 
 def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name="default"):
     """Store chunks in Chroma vector database
@@ -87,6 +132,10 @@ def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name="de
     
     print(f"Storing chunks in collection '{collection_name}' at {CHROMA_PATH}...")
     
+    # Generate summary for metadata
+    description = summarize_document(chunks)
+    collection_metadata = {"description": description}
+    
     if append_mode and os.path.exists(CHROMA_PATH):
         # Load existing database and add new documents
         vectordb = Chroma(
@@ -94,6 +143,14 @@ def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name="de
             embedding_function=embeddings,
             collection_name=collection_name
         )
+        # Update collection metadata
+        # Note: Chroma's langchain wrapper doesn't expose easy metadata update, 
+        # but we can try via the underlying collection
+        try:
+            vectordb._collection.modify(metadata=collection_metadata)
+        except:
+            pass
+            
         vectordb.add_documents(chunks)
         print(f"✓ Documents appended to collection '{collection_name}'!")
     else:
@@ -102,11 +159,61 @@ def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name="de
             documents=chunks,
             embedding=embeddings,
             persist_directory=CHROMA_PATH,
-            collection_name=collection_name
+            collection_name=collection_name,
+            collection_metadata=collection_metadata
         )
         print(f"✓ New collection '{collection_name}' created successfully!")
     
     return vectordb
+
+# 6.6 STORE IN QDRANT (FOR AGENT)
+def store_in_qdrant(chunks, embeddings, collection_name=QDRANT_COLLECTION):
+    """Store chunks in Qdrant vector database (for agent queries)
+    
+    Args:
+        chunks: Document chunks to store
+        embeddings: Embeddings instance
+        collection_name: Name of the collection (default: agent_knowledge)
+    
+    Returns:
+        QdrantVectorStore instance
+    """
+    print(f"Storing chunks in Qdrant collection '{collection_name}'...")
+    
+    # Use shared Qdrant client
+    client = get_qdrant_client()
+    
+    # Check if collection exists
+    try:
+        collections = client.get_collections().collections
+        collection_exists = any(col.name == collection_name for col in collections)
+    except:
+        collection_exists = False
+    
+    # Create collection if it doesn't exist
+    if not collection_exists:
+        print(f"Creating new Qdrant collection '{collection_name}'...")
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=768,  # all-mpnet-base-v2 embedding size
+                distance=Distance.COSINE
+            )
+        )
+    
+    # Store documents using LangChain's Qdrant wrapper with shared client
+    # First create/get the vectorstore with the shared client
+    vectorstore = QdrantVectorStore(
+        client=client,
+        collection_name=collection_name,
+        embedding=embeddings
+    )
+    
+    # Add documents to the vectorstore
+    vectorstore.add_documents(chunks)
+    
+    print(f"✓ Stored {len(chunks)} chunks in Qdrant collection '{collection_name}'")
+    return vectorstore
 
 # 6.5. INGEST DOCUMENT (FOR UI)
 def ingest_document(file_path, collection_name, append_mode=True, progress_callback=None):
@@ -123,7 +230,7 @@ def ingest_document(file_path, collection_name, append_mode=True, progress_callb
     """
     return ingest_document_to_collection(file_path, collection_name, append_mode, progress_callback)
 
-def ingest_document_to_collection(file_path, collection_name, append_mode=True, progress_callback=None, chunking_strategy="semantic"):
+def ingest_document_to_collection(file_path, collection_name, append_mode=True, progress_callback=None, chunking_strategy="semantic", store_in_qdrant_db=False):
     """Ingest a document into a specific collection
     
     Args:
@@ -132,10 +239,64 @@ def ingest_document_to_collection(file_path, collection_name, append_mode=True, 
         append_mode: If True, append to existing database. If False, replace database.
         progress_callback: Optional callback function to report progress (receives message string)
         chunking_strategy: Chunking strategy - "semantic" or "fixed" (default: "semantic")
+        store_in_qdrant_db: If True, also store in Qdrant for agent use (default: False)
     
     Returns:
         tuple: (vectordb, num_chunks) - The vector database and number of chunks created
     """
+    try:
+        # Load document
+        documents = load_document(file_path)
+        
+        # Initialize embeddings
+        embeddings = get_embeddings()
+        
+        # Split using specified chunking strategy (this is the slow part)
+        chunks = split_documents(documents, embeddings=embeddings, strategy=chunking_strategy)
+        
+        # Store in ChromaDB for manual collection selection
+        vectordb = store_in_vectordb(chunks, embeddings, append_mode=append_mode, collection_name=collection_name)
+        
+        # Optionally store in Qdrant for agent queries
+        if store_in_qdrant_db:
+            store_in_qdrant(chunks, embeddings)
+        
+        return vectordb, len(chunks)
+        
+    except Exception as e:
+        print(f"❌ Error during ingestion: {str(e)}")
+        raise
+
+# NEW: Ingest document to Qdrant only (for agent)
+def ingest_document_to_qdrant(file_path, progress_callback=None, chunking_strategy="semantic"):
+    """Ingest a document into Qdrant database (for agent queries only)
+    
+    Args:
+        file_path: Path to the PDF file to ingest
+        progress_callback: Optional callback function to report progress (receives message string)
+        chunking_strategy: Chunking strategy - "semantic" or "fixed" (default: "semantic")
+    
+    Returns:
+        tuple: (qdrant_vectorstore, num_chunks) - The Qdrant vector store and number of chunks created
+    """
+    try:
+        # Load document
+        documents = load_document(file_path)
+        
+        # Initialize embeddings
+        embeddings = get_embeddings()
+        
+        # Split using specified chunking strategy
+        chunks = split_documents(documents, embeddings=embeddings, strategy=chunking_strategy)
+        
+        # Store in Qdrant only
+        qdrant_vectorstore = store_in_qdrant(chunks, embeddings)
+        
+        return qdrant_vectorstore, len(chunks)
+        
+    except Exception as e:
+        print(f"❌ Error during Qdrant ingestion: {str(e)}")
+        raise
     try:
         # Load document
         documents = load_document(file_path)

@@ -7,7 +7,11 @@ Optimized setup:
 import os
 import sys
 from dotenv import load_dotenv
-from langfuse import Langfuse
+
+# Langfuse temporarily disabled - package version incompatibility
+Langfuse = None
+LANGFUSE_AVAILABLE = False
+
 import uuid
 
 # Fix import path - add parent directory
@@ -149,6 +153,10 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
     print("=" * 70)
     print()
     
+    if not LANGFUSE_AVAILABLE:
+        print("Error: Langfuse is not available. Cannot run evaluation.")
+        return []
+    
     langfuse = Langfuse()
     try:
         dataset = langfuse.get_dataset(name=dataset_name)
@@ -159,7 +167,7 @@ def run_answer_evaluation(dataset_name: str, collection_name: str, k: int = 5):
         print()
     except Exception as e:
         print(f"Error: {e}")
-        return
+        return []
     
     # Reuse components from query.py (Groq for generation)
     vectordb = load_vectordb(collection_name)
