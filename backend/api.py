@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json
 from typing import List, Dict, Optional, Any, AsyncGenerator
 from sqlalchemy.orm import Session
@@ -184,6 +184,11 @@ class AgentQueryRequest(BaseModel):
     question: str
     k: Optional[int] = 3
 
+class UpdateCollectionDescriptionRequest(BaseModel):
+    """Request model for updating collection description"""
+    collection_name: str = Field(..., description="Name of the collection")
+    description: str = Field(..., description="New description for the collection")
+
 
 # Helper function to initialize RAG system for a specific collection
 def initialize_rag_system(collection_name: str):
@@ -340,29 +345,192 @@ async def query_rag(request: QueryRequest):
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 
-# NEW: ReAct Agent with Qdrant + Web Search
-@app.post("/react_agent_query")
-async def react_agent_query(request: AgentQueryRequest):
+# LangGraph ReAct Agent with Multi-Collection Support
+@app.post("/langgraph_agent_query")
+async def langgraph_agent_query(request: AgentQueryRequest):
     """
-    ReAct Agent: Uses Qdrant DB first, falls back to web search.
-    Returns thought process, source, and answer.
+    LangGraph ReAct Agent: Automatically selects the best tool(s) from multiple collections.
+    Uses ReAct framework for intelligent reasoning and tool selection.
+    
+    Returns:
+        - answer: Final answer from the agent
+        - tool_used: First tool used (for UI display)
+        - tools_used: List of all tools the agent invoked
+        - reasoning_steps: Step-by-step reasoning trace
+        - chunks: Retrieved document chunks (if any)
     """
     try:
-        from backend.agent import react_agent_qdrant
+        from backend.langgraph_agent import get_agent
         
-        # Execute ReAct agent
-        result = react_agent_qdrant(request.question, k=request.k)
+        # Get the agent and execute query
+        agent = get_agent()
+        result = agent.invoke(request.question)
+        
+        # Extract tools used
+        tools_used_list = result.get("tools_used", [])
+        tool_used = tools_used_list[0] if tools_used_list else "unknown"
+        
+        # Format intermediate steps as reasoning steps
+        intermediate_steps = result.get("intermediate_steps", [])
+        reasoning_steps = []
+        for step in intermediate_steps:
+            tool_name = step.get("tool", "unknown")
+            reasoning_steps.append(f"Using tool: {tool_name}")
         
         return {
             "answer": result["answer"],
-            "source": result["source"],  # 'qdrant', 'web', or 'none'
-            "thought_process": result["thought_process"],
-            "chunks": result["chunks"],
-            "web_results": result["web_results"]
+            "tool_used": tool_used,  # Single tool for UI
+            "tools_used": tools_used_list,  # All tools for reference
+            "reasoning_steps": reasoning_steps,
+            "chunks": [],  # TODO: Extract chunks from tool outputs
+            "intermediate_steps": intermediate_steps,  # Raw steps for debugging
+            "success": True
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ReAct agent query failed: {str(e)}")
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"[ERROR] LangGraph agent failed:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=f"LangGraph agent query failed: {str(e)}")
+
+
+# Collection Management Endpoints
+class CreateCollectionRequest(BaseModel):
+    """Request model for creating a collection"""
+    collection_name: str = Field(..., description="Name of the collection")
+    description: str = Field(..., description="Description for the collection (used in tool description)")
+
+@app.post("/collections/create")
+async def create_collection(request: CreateCollectionRequest):
+    """
+    Create a new Qdrant collection with metadata.
+    The collection will automatically become available as a tool for the agent.
+    """
+    try:
+        from backend.collection_manager import get_collection_manager
+        
+        # Extract from request body
+        collection_name = request.collection_name.strip()
+        description = request.description
+        
+        if len(collection_name) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Collection name must be at least 3 characters long"
+            )
+        
+        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$', collection_name):
+            raise HTTPException(
+                status_code=400,
+                detail="Collection name must start and end with a letter or number"
+            )
+        
+        # Create collection
+        manager = get_collection_manager()
+        success = manager.create_collection(collection_name, description)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Collection already exists or creation failed")
+        
+        return {
+            "success": True,
+            "message": f"Collection '{collection_name}' created successfully",
+            "collection_name": collection_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create collection: {str(e)}")
+
+
+@app.get("/collections/list")
+async def list_all_collections():
+    """
+    List all available Qdrant collections with their metadata.
+    Shows which tools are available for the agent.
+    """
+    try:
+        from backend.collection_manager import get_collection_manager
+        
+        manager = get_collection_manager()
+        collections = manager.get_all_collections_metadata()
+        
+        # Get detailed info for each collection
+        collections_list = []
+        for name, metadata in collections.items():
+            info = manager.get_collection_info(name)
+            collections_list.append({
+                "name": name,
+                "description": metadata.get("description", ""),
+                "document_count": info.get("points_count", 0) if info else 0,
+                "created_at": metadata.get("created_at"),
+                "last_updated": metadata.get("last_updated")
+            })
+        
+        return {
+            "collections": collections_list,
+            "total": len(collections_list)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
+
+
+@app.post("/collections/update_description")
+async def update_collection_description(request: UpdateCollectionDescriptionRequest):
+    """
+    Update the description of an existing collection.
+    This changes the tool description that the agent sees.
+    """
+    try:
+        from backend.collection_manager import get_collection_manager
+        
+        manager = get_collection_manager()
+        success = manager.update_collection_metadata(
+            collection_name=request.collection_name,
+            description=request.description
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        
+        return {
+            "success": True,
+            "message": f"Description updated for collection '{request.collection_name}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update description: {str(e)}")
+
+
+@app.delete("/collections/{collection_name}")
+async def delete_collection(collection_name: str):
+    """
+    Delete a Qdrant collection and its metadata.
+    WARNING: This permanently deletes all documents in the collection.
+    """
+    try:
+        from backend.collection_manager import get_collection_manager
+        
+        manager = get_collection_manager()
+        success = manager.delete_collection(collection_name)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Collection not found or deletion failed")
+        
+        return {
+            "success": True,
+            "message": f"Collection '{collection_name}' deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
+
 
 # Ingest endpoint
 @app.post("/ingest", response_model=IngestStartResponse)
@@ -462,12 +630,12 @@ async def ingest_pdf(
 async def ingest_pdf_qdrant(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="PDF file to ingest into Qdrant"),
+    collection_name: str = Form(..., description="Name of the Qdrant collection"),
     chunking_strategy: str = Form("semantic", description="semantic or fixed"),
     db: Session = Depends(get_db)
 ):
     """
-    Ingest a PDF into Qdrant database (for agent queries).
-    This is separate from ChromaDB collections.
+    Ingest a PDF into a specific Qdrant collection (for agent queries).
     """
     # Validate file type
     if not file.filename.endswith('.pdf'):
@@ -476,6 +644,13 @@ async def ingest_pdf_qdrant(
     # Validate chunking strategy
     if chunking_strategy not in ["semantic", "fixed"]:
         raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
+    
+    # Validate collection exists
+    from backend.collection_manager import get_collection_manager
+    manager = get_collection_manager()
+    collections = manager.list_collections()
+    if collection_name not in collections:
+        raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' does not exist. Create it first.")
     
     # Generate unique ingestion ID
     ingestion_id = str(uuid.uuid4())
@@ -495,7 +670,7 @@ async def ingest_pdf_qdrant(
         create_ingestion_job(
             db,
             ingestion_id=ingestion_id,
-            collection_name="qdrant_agent_knowledge",  # Fixed name for Qdrant
+            collection_name=f"qdrant_{collection_name}",
             chunking_strategy=chunking_strategy,
             original_filename=file.filename,
             status=IngestionStatus.PENDING
@@ -506,6 +681,7 @@ async def ingest_pdf_qdrant(
             process_qdrant_ingestion_background,
             ingestion_id,
             temp_path,
+            collection_name,
             chunking_strategy,
             file.filename
         )
@@ -530,12 +706,14 @@ async def ingest_pdf_qdrant(
 def process_qdrant_ingestion_background(
     ingestion_id: str,
     file_path: str,
+    collection_name: str,
     chunking_strategy: str,
     original_filename: str
 ):
-    """Background task to ingest PDF into Qdrant"""
+    """Background task to ingest PDF into Qdrant collection"""
     print(f"\n[BACKGROUND TASK] Starting Qdrant ingestion: {ingestion_id}")
     print(f"[BACKGROUND TASK] File: {original_filename}")
+    print(f"[BACKGROUND TASK] Collection: {collection_name}")
     print(f"[BACKGROUND TASK] Strategy: {chunking_strategy}")
     
     db = SessionLocal()
@@ -554,10 +732,11 @@ def process_qdrant_ingestion_background(
         from backend.ingest import ingest_document_to_qdrant
         
         # Perform ingestion
-        print(f"[BACKGROUND TASK] Starting document ingestion...")
-        update_ingestion_job(db, ingestion_id, progress=30, message="Ingesting document into Qdrant...")
+        print(f"[BACKGROUND TASK] Starting document ingestion to collection '{collection_name}'...")
+        update_ingestion_job(db, ingestion_id, progress=30, message=f"Ingesting document into Qdrant collection '{collection_name}'...")
         qdrant_vectorstore, num_chunks = ingest_document_to_qdrant(
             file_path=file_path,
+            collection_name=collection_name,
             chunking_strategy=chunking_strategy
         )
         
@@ -597,7 +776,7 @@ def process_qdrant_ingestion_background(
         db.close()
         
         # Delete temp file
-        if os.exists(file_path):
+        if os.path.exists(file_path):
             try:
                 os.remove(file_path)
             except:
@@ -689,269 +868,6 @@ def process_ingestion_background(
             except:
                 pass
 
-# NEW: ReAct Agent with Qdrant + Web Search
-@app.post("/react_agent_query")
-async def react_agent_query(request: AgentQueryRequest):
-    """
-    ReAct Agent: Uses Qdrant DB first, falls back to web search.
-    Returns thought process, source, and answer.
-    """
-    try:
-        from backend.agent import react_agent_qdrant
-        
-        # Execute ReAct agent
-        result = react_agent_qdrant(request.question, k=request.k)
-        
-        return {
-            "answer": result["answer"],
-            "source": result["source"],  # 'qdrant', 'web', or 'none'
-            "thought_process": result["thought_process"],
-            "chunks": result["chunks"],
-            "web_results": result["web_results"]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ReAct agent query failed: {str(e)}")
-
-# Ingest endpoint
-@app.post("/ingest", response_model=IngestStartResponse)
-async def ingest_pdf(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="PDF file to ingest"),
-    collection_name: str = Form(..., description="Name of the collection"),
-    chunking_strategy: str = Form("semantic", description="semantic or fixed"),
-    db: Session = Depends(get_db)
-):
-    
-    # Step 1: Clean the input (remove extra spaces)
-    collection_name = collection_name.strip()
-    
-    # Step 2: Validate length
-    if len(collection_name) < 3:
-        raise HTTPException(
-            status_code=400,
-            detail="Collection name must be at least 3 characters long"
-        )
-    
-    if len(collection_name) > 512:
-        raise HTTPException(
-            status_code=400,
-            detail="Collection name must be less than 512 characters"
-        )
-    
-    # Step 3: Validate format (must start/end with letter or number)
-    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$', collection_name):
-        raise HTTPException(
-            status_code=400,
-            detail="Collection name must start and end with a letter or number, "
-                   "and can only contain letters, numbers, dots (.), underscores (_), or hyphens (-)"
-        )
-    # ========== END VALIDATION BLOCK ==========
-    
-    # Validate file type (EXISTING CODE - DON'T CHANGE)
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    # Validate chunking strategy (EXISTING CODE - DON'T CHANGE)
-    if chunking_strategy not in ["semantic", "fixed"]:
-        raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
-    
-    # NEW: Generate unique ingestion ID
-    ingestion_id = str(uuid.uuid4())
-    
-    # Create temp file to save upload
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    temp_path = temp_file.name
-    temp_file.close()
-    
-    try:
-        # Save uploaded file to temp path
-        with open(temp_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        # Create database record for tracking
-        create_ingestion_job(
-            db,
-            ingestion_id=ingestion_id,
-            collection_name=collection_name,
-            chunking_strategy=chunking_strategy,
-            original_filename=file.filename,
-            status=IngestionStatus.PENDING
-        )
-        
-        # Start background task
-        background_tasks.add_task(
-            process_ingestion_background,
-            ingestion_id,
-            temp_path,
-            collection_name,
-            chunking_strategy,
-            file.filename
-        )
-        
-        # Return immediately with ingestion ID
-        return IngestStartResponse(
-            ingestion_id=ingestion_id,
-            message=f"Ingestion started for '{file.filename}'",
-            status="pending"
-        )
-        
-    except Exception as e:
-        # Clean up temp file if error occurs before background task starts
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-        raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")
-
-# NEW: Ingest to Qdrant (for agent knowledge base)
-@app.post("/ingest_qdrant")
-async def ingest_pdf_qdrant(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="PDF file to ingest into Qdrant"),
-    chunking_strategy: str = Form("semantic", description="semantic or fixed"),
-    db: Session = Depends(get_db)
-):
-    """
-    Ingest a PDF into Qdrant database (for agent queries).
-    This is separate from ChromaDB collections.
-    """
-    # Validate file type
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    # Validate chunking strategy
-    if chunking_strategy not in ["semantic", "fixed"]:
-        raise HTTPException(status_code=400, detail="Invalid chunking_strategy")
-    
-    # Generate unique ingestion ID
-    ingestion_id = str(uuid.uuid4())
-    
-    # Create temp file to save upload
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    temp_path = temp_file.name
-    temp_file.close()
-    
-    try:
-        # Save uploaded file to temp path
-        with open(temp_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        # Create database record for tracking
-        create_ingestion_job(
-            db,
-            ingestion_id=ingestion_id,
-            collection_name="qdrant_agent_knowledge",  # Fixed name for Qdrant
-            chunking_strategy=chunking_strategy,
-            original_filename=file.filename,
-            status=IngestionStatus.PENDING
-        )
-        
-        # Start background task for Qdrant ingestion
-        background_tasks.add_task(
-            process_qdrant_ingestion_background,
-            ingestion_id,
-            temp_path,
-            chunking_strategy,
-            file.filename
-        )
-        
-        # Return immediately with ingestion ID
-        return IngestStartResponse(
-            ingestion_id=ingestion_id,
-            message=f"Qdrant ingestion started for '{file.filename}'",
-            status="pending"
-        )
-        
-    except Exception as e:
-        # Clean up temp file if error occurs before background task starts
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-        raise HTTPException(status_code=500, detail=f"Failed to start Qdrant ingestion: {str(e)}")
-
-# Background task function for Qdrant ingestion
-def process_qdrant_ingestion_background(
-    ingestion_id: str,
-    file_path: str,
-    chunking_strategy: str,
-    original_filename: str
-):
-    """Background task to ingest PDF into Qdrant"""
-    print(f"\n[BACKGROUND TASK] Starting Qdrant ingestion: {ingestion_id}")
-    print(f"[BACKGROUND TASK] File: {original_filename}")
-    print(f"[BACKGROUND TASK] Strategy: {chunking_strategy}")
-    
-    db = SessionLocal()
-    try:
-        # Update status to processing
-        print(f"[BACKGROUND TASK] Updating status to PROCESSING...")
-        update_ingestion_job(
-            db, 
-            ingestion_id, 
-            status=IngestionStatus.PROCESSING, 
-            message="Processing PDF and creating chunks...",
-            progress=10
-        )
-        
-        # Import here to avoid circular imports
-        from backend.ingest import ingest_document_to_qdrant
-        
-        # Perform ingestion
-        print(f"[BACKGROUND TASK] Starting document ingestion...")
-        update_ingestion_job(db, ingestion_id, progress=30, message="Ingesting document into Qdrant...")
-        qdrant_vectorstore, num_chunks = ingest_document_to_qdrant(
-            file_path=file_path,
-            chunking_strategy=chunking_strategy
-        )
-        
-        # Mark as completed
-        print(f"[BACKGROUND TASK] Ingestion successful! {num_chunks} chunks created")
-        update_ingestion_job(
-            db,
-            ingestion_id,
-            status=IngestionStatus.COMPLETED,
-            message=f"Successfully ingested {num_chunks} chunks into Qdrant",
-            progress=100,
-            num_chunks=num_chunks
-        )
-        
-        print(f"✓ Qdrant ingestion {ingestion_id} completed: {num_chunks} chunks")
-        
-    except Exception as e:
-        # Mark as failed
-        error_message = str(e)
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(f"[BACKGROUND TASK] ERROR during ingestion:")
-        print(f"[BACKGROUND TASK] {traceback_str}")
-        
-        update_ingestion_job(
-            db,
-            ingestion_id,
-            status=IngestionStatus.FAILED,
-            message=f"Ingestion failed: {error_message}",
-            progress=0,
-            error=traceback_str
-        )
-        print(f"❌ Qdrant ingestion {ingestion_id} failed: {error_message}")
-    
-    finally:
-        # Always clean up
-        db.close()
-        
-        # Delete temp file
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except:
-                pass
-
 @app.get("/status/{ingestion_id}", response_model=StatusResponse)
 async def check_status(
     ingestion_id: str,
@@ -982,10 +898,12 @@ async def check_status(
     # Convert database object to response format and return
     return StatusResponse(**job.to_dict())
 
-# List collections endpoint
+# ========== CHROMADB RAG ENDPOINTS (Legacy System) ==========
+
+# List ChromaDB collections endpoint
 @app.get("/collections", response_model=CollectionsResponse)
 async def list_collections():
-    """List all available collections"""
+    """List all available ChromaDB collections (for legacy RAG system)"""
     if not os.path.exists("./Vector_DB"):
         return CollectionsResponse(collections=[])
     
@@ -1009,10 +927,10 @@ async def list_collections():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
 
-# Delete database endpoint
+# Delete ChromaDB database endpoint
 @app.delete("/database")
 async def delete_database(collection_name: Optional[str] = None):
-    """Delete entire database or specific collection"""
+    """Delete entire ChromaDB database or specific collection (for legacy RAG system)"""
     global rag_chains, retrievers, vectordbs
     
     if not os.path.exists("./Vector_DB"):
@@ -1043,7 +961,7 @@ async def delete_database(collection_name: Optional[str] = None):
             return {"success": True, "message": "Database deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete: {str(e)}")
-    
+
 # ========== EVALUATION ENDPOINTS ==========
 
 @app.post("/evaluate/retrieval", response_model=RetrievalEvalResponse)
@@ -1255,20 +1173,41 @@ async def evaluate_single_answer(request: SingleAnswerEvalRequest):
 async def root():
     """Root endpoint with API information"""
     return {
-        "message": "RAG Chatbot API with Multi-Collection Support",
-        "version": "2.0.0",
+        "message": "RAG Chatbot API with LangGraph Multi-Collection Agent",
+        "version": "3.0.0",
+        "systems": {
+            "langgraph_agent": "New intelligent multi-collection agent with ReAct framework",
+            "chromadb_rag": "Legacy RAG system for backward compatibility"
+        },
         "endpoints": {
-            "health": "GET /health",
-            "collections": "GET /collections",
-            "query": "POST /query (with collection_name)",
-            "ingest": "POST /ingest (returns ingestion_id)",
-            "status": "GET /status/{ingestion_id}",
-            "delete_collection": "DELETE /database?collection_name=name",
-            "delete_all": "DELETE /database",
-            "evaluate_retrieval": "POST /evaluate/retrieval",  
-            "evaluate_answers": "POST /evaluate/answers",
-            "evaluate_single": "POST /evaluate/single"
-        }
+            "agent": {
+                "langgraph_agent_query": "POST /langgraph_agent_query - Query LangGraph ReAct agent"
+            },
+            "qdrant_collections": {
+                "create_collection": "POST /collections/create - Create new Qdrant collection",
+                "list_collections": "GET /collections/list - List all Qdrant collections",
+                "update_description": "POST /collections/update_description - Update collection description",
+                "delete_collection": "DELETE /collections/{name} - Delete Qdrant collection",
+                "ingest_qdrant": "POST /ingest_qdrant - Ingest PDF to Qdrant collection"
+            },
+            "chromadb_rag": {
+                "query": "POST /query - Query ChromaDB RAG (with collection_name)",
+                "ingest": "POST /ingest - Ingest PDF to ChromaDB (returns ingestion_id)",
+                "collections": "GET /collections - List ChromaDB collections",
+                "delete_collection": "DELETE /database?collection_name=name - Delete ChromaDB collection",
+                "delete_all": "DELETE /database - Delete entire ChromaDB"
+            },
+            "monitoring": {
+                "health": "GET /health - Check API health",
+                "status": "GET /status/{ingestion_id} - Check ingestion status"
+            },
+            "evaluation": {
+                "evaluate_retrieval": "POST /evaluate/retrieval - Batch retrieval evaluation",
+                "evaluate_answers": "POST /evaluate/answers - Batch answer evaluation",
+                "evaluate_single": "POST /evaluate/single - Live single answer evaluation"
+            }
+        },
+        "documentation": "See LANGGRAPH_AGENT_GUIDE.md for usage examples"
     }
 
 if __name__ == "__main__":

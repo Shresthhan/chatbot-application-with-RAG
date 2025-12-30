@@ -133,22 +133,22 @@ def query_agent_api(question: str, k: int = 3):
     except Exception as e:
         raise Exception(f"Agent query failed: {str(e)}")
 
-def query_react_agent_api(question: str, k: int = 5):
-    """Query the ReAct Agent (Qdrant + Web) via API"""
+def query_langgraph_agent_api(question: str, k: int = 5):
+    """Query the LangGraph ReAct Agent (multi-collection + Web) via API"""
     try:
         response = requests.post(
-            f"{API_URL}/react_agent_query",
+            f"{API_URL}/langgraph_agent_query",
             json={"question": question, "k": k},
             timeout=120
         )
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        raise Exception(f"ReAct agent query failed: {str(e)}")
+        raise Exception(f"LangGraph agent query failed: {str(e)}")
 
 
 def get_collections_api():
-    """Get list of available collections via API"""
+    """Get list of available ChromaDB collections via API"""
     try:
         response = requests.get(
             f"{API_URL}/collections",
@@ -160,6 +160,64 @@ def get_collections_api():
     except Exception as e:
         st.error(f"Failed to fetch collections: {str(e)}")
         return []
+
+def get_qdrant_collections_api():
+    """Get list of available Qdrant collections via API"""
+    try:
+        response = requests.get(
+            f"{API_URL}/collections/list",
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("collections", [])
+    except Exception as e:
+        st.error(f"Failed to fetch Qdrant collections: {str(e)}")
+        return []
+
+def create_qdrant_collection_api(collection_name: str, description: str):
+    """Create a new Qdrant collection via API"""
+    try:
+        response = requests.post(
+            f"{API_URL}/collections/create",
+            json={
+                "collection_name": collection_name,
+                "description": description
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        raise Exception(f"Failed to create collection: {str(e)}")
+
+def update_qdrant_collection_description_api(collection_name: str, description: str):
+    """Update Qdrant collection description via API"""
+    try:
+        response = requests.post(
+            f"{API_URL}/collections/update_description",
+            json={
+                "collection_name": collection_name,
+                "description": description
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        raise Exception(f"Failed to update description: {str(e)}")
+
+def delete_qdrant_collection_api(collection_name: str):
+    """Delete a Qdrant collection via API"""
+    try:
+        response = requests.delete(
+            f"{API_URL}/collections/{collection_name}",
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        raise Exception(f"Failed to delete collection: {str(e)}")
     
 def check_ingestion_status_api(ingestion_id: str):
     """Calls FastAPI /status/{id} endpoint to get current status"""
@@ -195,11 +253,12 @@ def ingest_pdf_api(uploaded_file, collection_name: str, chunking_strategy: str =
     except Exception as e:
         raise Exception(f"API ingestion failed: {str(e)}")
 
-def ingest_pdf_qdrant_api(uploaded_file, chunking_strategy: str = "semantic"):
-    """Ingest PDF to Qdrant via API - returns ingestion_id instantly"""
+def ingest_pdf_qdrant_api(uploaded_file, collection_name: str, chunking_strategy: str = "semantic"):
+    """Ingest PDF to Qdrant collection via API - returns ingestion_id instantly"""
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
         data = {
+            "collection_name": collection_name,
             "chunking_strategy": chunking_strategy
         }
         response = requests.post(
@@ -323,15 +382,15 @@ with st.sidebar:
     st.divider()
 
     # Agent Mode Toggle
-    st.subheader("Agent Mode")
+    st.subheader("🤖 Agent Mode")
     agent_mode = st.checkbox(
-        "Enable ReAct Agent",
+        "Enable LangGraph Agent",
         value=st.session_state.agent_mode,
-        help="Agent searches Qdrant knowledge base first, then falls back to web search if needed"
+        help="LangGraph ReAct agent with multi-collection + web search capabilities"
     )
 
     if agent_mode:
-        st.info("Agent will search Qdrant DB then Web with reasoning")
+        st.info("🧠 Agent will intelligently select from all collections + web")
     else:
         st.caption("📚 Manual ChromaDB collection selection active")
 
@@ -448,48 +507,129 @@ with st.sidebar:
     elif st.session_state.sidebar_tab == "Ingestion":
         # Show different ingestion UI based on agent mode
         if st.session_state.agent_mode:
-            # AGENT MODE: Qdrant Ingestion
-            st.subheader("🗃️ Agent Knowledge Base (Qdrant)")
-            st.caption("Upload documents for the ReAct agent to search")
+            # AGENT MODE: Qdrant Multi-Collection Management
+            st.subheader("🗃️ LangGraph Agent Collections")
+            st.caption("Manage Qdrant collections for the agent")
             
-            chunking_strategy = st.selectbox(
-                "Chunking Strategy",
-                options=["semantic", "fixed"],
-                index=0,
-                help="semantic: context-aware (slower) | fixed: fixed-size (faster)"
-            )
+            # Collection Management Section
+            with st.expander("➕ Create New Collection", expanded=False):
+                new_col_name = st.text_input(
+                    "Collection Name",
+                    placeholder="e.g., python_docs",
+                    help="Alphanumeric, underscores, hyphens only"
+                )
+                new_col_desc = st.text_area(
+                    "Description (3-part format recommended)",
+                    placeholder="**Purpose:** Python programming documentation\\n\\n**Use for:**\\n- Python syntax questions\\n- API references\\n\\n**Examples:**\\n- 'How to use decorators in Python?'",
+                    height=150,
+                    help="Provide detailed description to help agent decide when to use this collection"
+                )
+                if st.button("Create Collection", use_container_width=True):
+                    if new_col_name and new_col_desc:
+                        try:
+                            result = create_qdrant_collection_api(new_col_name, new_col_desc)
+                            st.success(f"✅ Created collection: {new_col_name}")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ {str(e)}")
+                    else:
+                        st.warning("Please provide both name and description")
             
-            uploaded_file = st.file_uploader(
-                "Drag and drop PDF file",
-                type=["pdf"],
-                help="Upload documents to the agent's knowledge base",
-                label_visibility="collapsed"
-            )
+            # List Existing Collections
+            st.markdown("**Existing Collections:**")
+            qdrant_collections = get_qdrant_collections_api()
             
-            if st.button("Ingest to Qdrant", use_container_width=True, type="primary",
-                         disabled=uploaded_file is None):
-                if uploaded_file:
-                    try:
-                        with st.spinner("Starting Qdrant ingestion..."):
-                            result = ingest_pdf_qdrant_api(uploaded_file, chunking_strategy)
+            if qdrant_collections:
+                for col in qdrant_collections:
+                    col_name = col["name"]
+                    with st.expander(f"📁 {col_name}", expanded=False):
+                        st.caption(f"**Description:**")
+                        st.text(col.get("description", "No description"))
+                        st.caption(f"**Documents:** {col.get('document_count', 0)}")
+                        st.caption(f"**Created:** {col.get('created_at', 'Unknown')}")
                         
-                        from datetime import datetime
-                        ingestion_id = result["ingestion_id"]
-                        st.session_state.active_ingestions.append({
-                            "id": ingestion_id,
-                            "filename": uploaded_file.name,
-                            "collection": "Qdrant (agent_knowledge)",
-                            "strategy": chunking_strategy,
-                            "started_at": datetime.now().strftime("%H:%M:%S"),
-                            "target": "qdrant"
-                        })
+                        # Update description
+                        with st.form(key=f"update_{col_name}"):
+                            new_desc = st.text_area(
+                                "Update Description",
+                                value=col.get("description", ""),
+                                height=100
+                            )
+                            if st.form_submit_button("Update Description"):
+                                try:
+                                    update_qdrant_collection_description_api(col_name, new_desc)
+                                    st.success("✅ Updated!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ {str(e)}")
                         
-                        st.success("🎉 Qdrant Ingestion Started!")
-                        st.info(f"📌 Ingestion ID: `{ingestion_id}`")
-                        st.info("💡 Processing in background. Check status below!")
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error starting Qdrant ingestion: {str(e)}")
+                        # Delete collection
+                        if st.button(f"🗑️ Delete {col_name}", key=f"del_qdrant_{col_name}"):
+                            try:
+                                delete_qdrant_collection_api(col_name)
+                                st.success(f"✅ Deleted {col_name}")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ {str(e)}")
+            else:
+                st.info("No collections yet. Create one above!")
+            
+            st.divider()
+            
+            # Ingestion Section
+            st.subheader("📤 Ingest Document")
+            
+            # Select target collection
+            if qdrant_collections:
+                target_collection = st.selectbox(
+                    "Target Collection",
+                    options=[col["name"] for col in qdrant_collections],
+                    help="Select which collection to ingest into"
+                )
+                
+                chunking_strategy = st.selectbox(
+                    "Chunking Strategy",
+                    options=["semantic", "fixed"],
+                    index=0,
+                    help="semantic: context-aware (slower) | fixed: fixed-size (faster)"
+                )
+                
+                uploaded_file = st.file_uploader(
+                    "Drag and drop PDF file",
+                    type=["pdf"],
+                    help="Upload documents to the selected collection",
+                    label_visibility="collapsed"
+                )
+                
+                if st.button("Ingest to Collection", use_container_width=True, type="primary",
+                             disabled=uploaded_file is None):
+                    if uploaded_file:
+                        try:
+                            with st.spinner(f"Ingesting to {target_collection}..."):
+                                result = ingest_pdf_qdrant_api(uploaded_file, target_collection, chunking_strategy)
+                            
+                            from datetime import datetime
+                            ingestion_id = result["ingestion_id"]
+                            st.session_state.active_ingestions.append({
+                                "id": ingestion_id,
+                                "filename": uploaded_file.name,
+                                "collection": f"Qdrant ({target_collection})",
+                                "strategy": chunking_strategy,
+                                "started_at": datetime.now().strftime("%H:%M:%S"),
+                                "target": "qdrant"
+                            })
+                            
+                            st.success("🎉 Ingestion Started!")
+                            st.info(f"📌 Ingestion ID: `{ingestion_id}`")
+                            st.info("💡 Processing in background. Check status below!")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error: {str(e)}")
+            else:
+                st.warning("⚠️ Create a collection first before ingesting documents!")
         
         else:
             # MANUAL MODE: ChromaDB Collection Ingestion
@@ -856,7 +996,7 @@ try:
         if len(current_messages) == 0 and not st.session_state.pending_query:
             with st.chat_message("assistant"):
                 if st.session_state.agent_mode:
-                    st.markdown("Ask me anything! \n\n**ReAct Agent Active**: I will search my Qdrant knowledge base first, then use web search if needed. I'll show you my reasoning process!")
+                    st.markdown("Ask me anything! \n\n**Agent Active**:")
                 else:
                     st.markdown(f"Ask me anything about your documents!\n\n📚 Currently using ChromaDB collection: **{st.session_state.current_collection}**")
         
@@ -866,13 +1006,28 @@ try:
         
         for idx, message in enumerate(current_messages):
             with st.chat_message(message["role"]):
-                # Show thought process for agent responses
+                # Show reasoning steps for LangGraph agent responses
+                if message.get("reasoning_steps"):
+                    with st.expander("🤔 Agent Reasoning", expanded=False):
+                        for i, step in enumerate(message["reasoning_steps"], 1):
+                            st.markdown(f"**{i}.** {step}")
+                
+                # Show tool used for LangGraph agent responses
+                if message.get("tool_used"):
+                    tool_used = message["tool_used"]
+                    if tool_used.startswith("search_"):
+                        collection = tool_used.replace("search_", "")
+                        st.success(f"**🗂️ Collection:** {collection}")
+                    elif tool_used == "web_search":
+                        st.info("**🌐 Source:** Web Search")
+                
+                # Legacy: Show thought process for old agent responses
                 if message.get("thought_process"):
                     with st.expander("Agent Thought Process", expanded=False):
                         for i, thought in enumerate(message["thought_process"], 1):
                             st.markdown(f"**Step {i}:** {thought}")
                 
-                # Show source badge for agent responses
+                # Legacy: Show source badge for old agent responses
                 if message.get("source"):
                     source = message["source"]
                     if source == "qdrant":
@@ -975,68 +1130,57 @@ try:
             query = st.session_state.pending_query
             
             if st.session_state.agent_mode:
-                # NEW: ReAct Agent Mode (Qdrant + Web)
-                with st.spinner("Thinking..."):
+                # LangGraph Multi-Collection Agent Mode
+                with st.spinner("🧠 Agent thinking..."):
                     try:
-                        result = query_react_agent_api(query, st.session_state.retrieval_k)
+                        result = query_langgraph_agent_api(query, st.session_state.retrieval_k)
                         response = result["answer"]
-                        source = result["source"]  # 'qdrant', 'web', or 'none'
-                        thought_process = result["thought_process"]
+                        tool_used = result.get("tool_used", "unknown")
+                        reasoning_steps = result.get("reasoning_steps", [])
                         source_chunks = result.get("chunks")
-                        web_results = result.get("web_results")
                         
                         with st.chat_message("assistant"):
-                            # Show thought process
-                            with st.expander("Agent Thought Process", expanded=True):
-                                for i, thought in enumerate(thought_process, 1):
-                                    st.markdown(f"**Step {i}:** {thought}")
+                            # Show agent reasoning
+                            if reasoning_steps:
+                                with st.expander("🤔 Agent Reasoning", expanded=True):
+                                    for i, step in enumerate(reasoning_steps, 1):
+                                        st.markdown(f"**{i}.** {step}")
                             
-                            # Show source badge
-                            if source == "qdrant":
-                                st.success("**Source:** Qdrant Knowledge Base")
-                            elif source == "web":
-                                st.info("**Source:** Web Search")
-                            else:
-                                st.warning("**Source:** No relevant information found")
+                            # Show tool used
+                            if tool_used != "unknown":
+                                if tool_used.startswith("search_"):
+                                    collection = tool_used.replace("search_", "")
+                                    st.success(f"**🗂️ Collection Used:** {collection}")
+                                elif tool_used == "web_search":
+                                    st.info("**🌐 Source:** Web Search")
                             
                             # Show answer
                             st.markdown(response)
                             
-                            # Show context based on source
-                            if source == "qdrant" and source_chunks:
-                                with st.expander("📄 View Qdrant Chunks", expanded=False):
+                            # Show context
+                            if source_chunks:
+                                with st.expander("📄 View Source Context", expanded=False):
                                     for i, chunk in enumerate(source_chunks, 1):
                                         st.markdown(f"**Chunk {i}**")
-                                        st.text_area(f"Content", chunk['content'], height=200, key=f"qdrant_chunk_{i}", disabled=True, label_visibility="collapsed")
-                                        st.divider()
-                            
-                            elif source == "web" and web_results:
-                                with st.expander("View Web Results", expanded=False):
-                                    for i, res in enumerate(web_results, 1):
-                                        st.markdown(f"**{i}. {res['title']}**")
-                                        st.caption(res['snippet'])
-                                        if res.get('url'):
-                                            st.markdown(f"[Source]({res['url']})")
+                                        st.text_area(f"Content", chunk.get('content', chunk), height=200, key=f"agent_chunk_{i}", disabled=True, label_visibility="collapsed")
                                         st.divider()
                         
                         if st.session_state.current_session not in st.session_state.chat_chunks:
                             st.session_state.chat_chunks[st.session_state.current_session] = []
                         
-                        # Store chunks or web results
-                        stored_data = source_chunks if source_chunks else (web_results if web_results else [])
-                        st.session_state.chat_chunks[st.session_state.current_session].append(stored_data)
+                        st.session_state.chat_chunks[st.session_state.current_session].append(source_chunks or [])
                         
                         current_messages.append({
                             "role": "assistant", 
                             "content": response, 
-                            "source": source, 
-                            "thought_process": thought_process
+                            "tool_used": tool_used,
+                            "reasoning_steps": reasoning_steps
                         })
                         st.session_state.pending_query = None
                         st.session_state.pending_session = None
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                        st.error(f"❌ Error: {str(e)}")
                         st.session_state.pending_query = None
                         st.rerun()
             else:

@@ -7,6 +7,7 @@ langchain-experimental
 langchain-google-genai
 langchain-huggingface
 langchain-text-splitters
+langchain-groq
 pypdf
 sentence-transformers
 python-dotenv
@@ -20,4 +21,5 @@ langfuse
 ragas
 tavily
 httpx
+langgraph>=0.2.0
 

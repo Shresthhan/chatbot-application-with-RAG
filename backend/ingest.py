@@ -167,13 +167,14 @@ def store_in_vectordb(chunks, embeddings, append_mode=False, collection_name="de
     return vectordb
 
 # 6.6 STORE IN QDRANT (FOR AGENT)
-def store_in_qdrant(chunks, embeddings, collection_name=QDRANT_COLLECTION):
+def store_in_qdrant(chunks, embeddings, collection_name=QDRANT_COLLECTION, update_metadata=True):
     """Store chunks in Qdrant vector database (for agent queries)
     
     Args:
         chunks: Document chunks to store
         embeddings: Embeddings instance
         collection_name: Name of the collection (default: agent_knowledge)
+        update_metadata: If True, update collection metadata in registry
     
     Returns:
         QdrantVectorStore instance
@@ -213,6 +214,26 @@ def store_in_qdrant(chunks, embeddings, collection_name=QDRANT_COLLECTION):
     vectorstore.add_documents(chunks)
     
     print(f"✓ Stored {len(chunks)} chunks in Qdrant collection '{collection_name}'")
+    
+    # Update collection metadata if requested
+    if update_metadata:
+        try:
+            from backend.collection_manager import get_collection_manager
+            manager = get_collection_manager()
+            
+            # Get current document count
+            collection_info = client.get_collection(collection_name)
+            doc_count = collection_info.points_count
+            
+            # Update metadata
+            manager.update_collection_metadata(
+                collection_name=collection_name,
+                document_count=doc_count
+            )
+            print(f"✓ Updated metadata for collection '{collection_name}'")
+        except Exception as e:
+            print(f"⚠ Could not update metadata: {e}")
+    
     return vectorstore
 
 # 6.5. INGEST DOCUMENT (FOR UI)
@@ -268,11 +289,12 @@ def ingest_document_to_collection(file_path, collection_name, append_mode=True, 
         raise
 
 # NEW: Ingest document to Qdrant only (for agent)
-def ingest_document_to_qdrant(file_path, progress_callback=None, chunking_strategy="semantic"):
-    """Ingest a document into Qdrant database (for agent queries only)
+def ingest_document_to_qdrant(file_path, collection_name=QDRANT_COLLECTION, progress_callback=None, chunking_strategy="semantic"):
+    """Ingest a document into Qdrant database (for agent queries)
     
     Args:
         file_path: Path to the PDF file to ingest
+        collection_name: Name of the Qdrant collection (default: agent_knowledge)
         progress_callback: Optional callback function to report progress (receives message string)
         chunking_strategy: Chunking strategy - "semantic" or "fixed" (default: "semantic")
     
@@ -289,8 +311,8 @@ def ingest_document_to_qdrant(file_path, progress_callback=None, chunking_strate
         # Split using specified chunking strategy
         chunks = split_documents(documents, embeddings=embeddings, strategy=chunking_strategy)
         
-        # Store in Qdrant only
-        qdrant_vectorstore = store_in_qdrant(chunks, embeddings)
+        # Store in Qdrant with metadata update
+        qdrant_vectorstore = store_in_qdrant(chunks, embeddings, collection_name=collection_name, update_metadata=True)
         
         return qdrant_vectorstore, len(chunks)
         

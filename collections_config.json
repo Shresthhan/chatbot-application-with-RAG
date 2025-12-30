@@ -1,0 +1,18 @@
+{
+  "research_paper": {
+    "description": "1. Purpose: Search and retrieve information from academic research papers, including technical concepts, methodologies, experimental results, citations, and theoretical frameworks.\n\u200b\n\n2. Use for: Research papers, academic articles, scientific publications, neural networks, machine learning architectures, transformer models, attention mechanisms, deep learning, AI research, experimental results, paper summaries, author citations, methodology explanations, technical definitions, arxiv papers, conference papers, literature review.\n\u200b\n\n3. Examples:\n\n\"What is the attention mechanism explained in the research paper?\"\n\u200b\n\n\"Summarize the main contributions of the transformer architecture paper\"\n\u200b\n\n\"What datasets were used in the TechBot experiments?\"\n\u200b\n\n\"Explain the methodology used in the attention is all you need paper\"\n\u200b\n\n\"Who are the authors of the transformer paper and what institution are they from?\"\n\u200b\n\n\"What are the key findings and results from the TechBot research?\"\n\u200b\n\n\"Compare the performance metrics reported in these papers\"\n\u200b\n\n\"What are the limitations mentioned in the research?\"\n",
+    "created_at": "2025-12-30T12:20:11.945361",
+    "document_count": 67,
+    "last_updated": "2025-12-30T12:35:27.508517",
+    "vector_size": 768,
+    "distance": "COSINE"
+  },
+  "report": {
+    "description": "1. Purpose: Search and analyze business reports, case studies, project documentation, organizational analyses, industry reports, and strategic assessments.\n\u200b\n\n2. Use for: Case studies, business reports, project reports, company analysis, organizational behavior, management case studies, industry analysis, business strategy, operational reports, feasibility studies, market research, corporate documentation, executive summaries, business problems, solutions analysis, recommendations, business metrics.\n\u200b\n\n3. Examples:\n\n\"What is the main problem discussed in the case study?\"\n\u200b\n\n\"Summarize the key findings from the business report\"\n\u200b\n\n\"What recommendations are provided in this case study?\"\n\u200b\n\n\"What company or organization is this case study about?\"\n\u200b\n\n\"What are the challenges identified in the report?\"\n\u200b\n\n\"Explain the solutions proposed in the case study\"\n\u200b\n\n\"What data or metrics are presented in the business report?\"\n\u200b\n\n\"What is the background and context of this case?\"\n",
+    "created_at": "2025-12-30T12:38:32.055539",
+    "document_count": 41,
+    "last_updated": "2025-12-30T12:40:02.356955",
+    "vector_size": 768,
+    "distance": "COSINE"
+  }
+}

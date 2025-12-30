@@ -10,9 +10,11 @@ from langchain_community.vectorstores import Chroma
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from langchain_groq import ChatGroq
+from langchain_cerebras import ChatCerebras
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_core.messages import HumanMessage
 
 # Langfuse temporarily disabled - package version incompatibility
 CallbackHandler = None
@@ -31,7 +33,8 @@ else:
 CHROMA_PATH = "./Vector_DB"
 QDRANT_PATH = "./Qdrant_DB"
 QDRANT_COLLECTION = "agent_knowledge"
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+
 
 # Global cache for embeddings
 _embeddings = None
@@ -82,13 +85,30 @@ def load_qdrant_vectordb(collection_name=QDRANT_COLLECTION):
 
 # 2. SETUP LLM
 def get_llm():
-    """Initialize Groq LLM for fast generation"""
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",  # Fast, efficient model
-        groq_api_key=GROQ_API_KEY,
-        temperature=0.3
+    llm = ChatCerebras(
+        model="gpt-oss-120b",  
+        api_key=CEREBRAS_API_KEY,
+        temperature=0.3,
     )
     return llm
+
+def get_agent_system_prompt():
+    """Get the system prompt for agent reasoning"""
+    return """You are a helpful AI assistant with access to tools.
+
+CRITICAL STOPPING RULES:
+1. After calling a tool and receiving results, you MUST immediately provide your final answer
+2. DO NOT call multiple tools unless the first tool explicitly returns no results or an error
+3. DO NOT call the same tool more than once
+4. When you have ANY relevant information from a tool, use it to answer and STOP
+5. If a tool returns information (even if partial), provide your best answer based on that information
+
+Your job is to: 
+- Call the most relevant tool for the query
+- Evaluate if the results answer the question
+- Provide a final answer immediately
+
+Remember: After ONE successful tool call with results, you MUST provide your final answer. Do not make additional tool calls."""
 
 # 3. CREATE RAG CHAIN
 def create_rag_chain(vectordb, llm, k=3):
