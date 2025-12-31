@@ -172,23 +172,31 @@ chatbot-application-with-RAG/
 
 ## Architecture
 
-### System Architecture (Traditional RAG)
-<img src="images/chat-RAG-mermaid-diagram.png" width="500">
+#### System Architecture (Traditional RAG)
+<img src="images/chat-RAG-mermaid-diagram.png" width="350">
 
-### Agent Architecture (LangGraph ReAct)
+#### Agent Architecture (LangGraph ReAct)
 <!-- TODO: Add agent architecture diagram -->
-<img src="images/agent-architecture.png" width="800">
+<img src="images/agent-architecture.png" width="250">
 
-### User Interface Screenshots
+## User Interface Screenshots
+
+#### RAG Implementation
 <!-- TODO: Update with agent UI screenshots -->
 <img src="images/UI.png" width="500">
 
-### Agent Reasoning Display
+#### Ingestion Interface
+<img src="images/Ingestion.png" width="150">
+
+#### Agent Implementation
+<!-- TODO: Update with agent UI screenshots -->
+<img src="images/agent-mode.png" width="500">
+
+#### Agent Reasoning Display
 <!-- TODO: Add screenshot showing agent reasoning process -->
 <img src="images/agent-reasoning.png" width="500">
 
-### Ingestion Interface
-<img src="images/Ingestion.png" width="200">
+
 
 ## Technology Stack
 
