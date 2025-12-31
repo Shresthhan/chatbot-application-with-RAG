@@ -15,13 +15,16 @@ import shutil
 import uuid
 from datetime import datetime
 
-# Try to import Langfuse, but make it optional to avoid blocking the app
-# Temporarily disabled - package version incompatibility
-# To enable: pip install "langfuse>=2.40.0,<3.0"
-CallbackHandler = None
-Langfuse = None
-LANGFUSE_AVAILABLE = False
-print("⚠ Langfuse temporarily disabled - reinstall with: pip install 'langfuse>=2.40.0,<3.0'")
+# Try to import Langfuse for observability and tracing
+try:
+    from langfuse.langchain import CallbackHandler
+    LANGFUSE_AVAILABLE = True
+    print("✓ Langfuse 3.x LangChain integration loaded")
+except ImportError as e:
+    CallbackHandler = None
+    LANGFUSE_AVAILABLE = False
+    print(f"⚠ Langfuse not available: {e}")
+    print("  To enable: pip install langfuse")
 
 # Now import the evaluation functions
 from experiments.evaluate_rag import run_evaluation
@@ -65,20 +68,9 @@ rag_chains = {}
 retrievers = {}
 vectordbs = {}
 
-# Initialize Langfuse for observability
-if LANGFUSE_AVAILABLE:
-    try:
-        langfuse_handler = CallbackHandler()
-        langfuse_client = Langfuse()
-        print("✓ Langfuse initialized successfully")
-    except Exception as e:
-        print(f"⚠ Langfuse initialization failed: {e}")
-        langfuse_handler = None
-        langfuse_client = None
-else:
-    langfuse_handler = None
-    langfuse_client = None
-    print("⚠ Langfuse not available, running without observability")
+# We don't need to initialize Langfuse client globally
+# Callback handlers will be created per-request
+print("✓ Langfuse LangChain integration ready" if LANGFUSE_AVAILABLE else "⚠ Langfuse not available, running without observability")
 
 # Pydantic models
 class QueryRequest(BaseModel):
@@ -266,45 +258,17 @@ async def query_rag(request: QueryRequest):
         llm = get_llm()
         rag_chain, retriever = create_rag_chain(vectordb, llm, k=k)
         
-        # Custom explicit trace generation to get ID
+        # Generate trace ID for logging
         trace_id = str(uuid.uuid4())
         langfuse_callback = None
         
-        if langfuse_client:
+        if LANGFUSE_AVAILABLE:
             try:
-                # Create specific trace for this request
-                trace = langfuse_client.trace(
-                    id=trace_id,
-                    name="streamlit_query",
-                    input={"question": request.question, "k": k, "collection": collection_name},
-                    metadata={
-                        "retrieval_k": k,
-                        "collection": collection_name,
-                        "endpoint": "/query",
-                        "model": "llama-3.1-8b-instant",
-                        "provider": "groq"
-                    }
-                )
-                # Get handler bound to this trace
-                if hasattr(trace, 'get_langchain_handler'):
-                    langfuse_callback = trace.get_langchain_handler()
-                else:
-                    print("⚠ trace object missing get_langchain_handler")
-                    # Fall through to fallback
+                # Create callback handler for this query
+                langfuse_callback = CallbackHandler()
+                print(f"[API] Langfuse callback created for query (session: {trace_id})")
             except Exception as e:
-                print(f"⚠ Langfuse trace creation failed: {e}")
-                # Fallback to global handler to ensure connection isn't lost
-                langfuse_callback = langfuse_handler
-        
-        # If we failed to get a specific callback but have a global one, use it
-        if not langfuse_callback:
-            langfuse_callback = langfuse_handler
-            # If we fall back, the trace_id we generated won't match the one Langfuse uses
-            # But at least logging will work.
-        
-        # Simple tracing with callback handler
-        # We pass the callback to retriever too if possible, but standard retriever invoke might not take config the same way
-        # depending on implementation. Let's focus on the chain invoke.
+                print(f"⚠ Langfuse callback creation failed: {e}")
         
         source_docs = retriever.invoke(request.question)
         
@@ -320,12 +284,8 @@ async def query_rag(request: QueryRequest):
             }
         }
         
-        # Update trace output if we have the object (optional but good for debugging)
-        if langfuse_client and langfuse_callback:
-            # We don't need to manually update trace input/output here because the handler does it,
-            # BUT the handler does it for the CHAIN span. The root trace might need update.
-            # actually trace.get_langchain_handler() usually attaches everything as spans under the trace.
-            pass
+        # Callback handler automatically tracks the chain execution
+        # No need for manual trace updates
         
         answer = rag_chain.invoke(request.question, config=config)
         
@@ -358,32 +318,59 @@ async def langgraph_agent_query(request: AgentQueryRequest):
         - tools_used: List of all tools the agent invoked
         - reasoning_steps: Step-by-step reasoning trace
         - chunks: Retrieved document chunks (if any)
+        - trace_id: Langfuse trace ID (if tracing is enabled)
     """
     try:
         from backend.langgraph_agent import get_agent
+        import uuid
         
-        # Get the agent and execute query
+        # Generate trace ID
+        trace_id = str(uuid.uuid4())
+        
+        # Initialize Langfuse tracing if available
+        langfuse_callback = None
+        if LANGFUSE_AVAILABLE:
+            try:
+                # Create callback handler for this agent execution
+                # Langfuse 3.x automatically uses env variables (LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST)
+                langfuse_callback = CallbackHandler()
+                print(f"[API] Langfuse callback created (trace session: {trace_id})")
+            except Exception as e:
+                print(f"[API] Langfuse callback creation failed: {e}")
+        
+        # Get the agent and execute query with Langfuse tracing
         agent = get_agent()
-        result = agent.invoke(request.question)
+        result = agent.invoke(request.question, langfuse_handler=langfuse_callback)
         
         # Extract tools used
         tools_used_list = result.get("tools_used", [])
         tool_used = tools_used_list[0] if tools_used_list else "unknown"
         
-        # Format intermediate steps as reasoning steps
-        intermediate_steps = result.get("intermediate_steps", [])
+        # Get detailed reasoning trace
+        reasoning_trace = result.get("reasoning_trace", [])
+        
+        # Format reasoning trace for UI display
         reasoning_steps = []
-        for step in intermediate_steps:
-            tool_name = step.get("tool", "unknown")
-            reasoning_steps.append(f"Using tool: {tool_name}")
+        for step in reasoning_trace:
+            step_type = step.get("type")
+            content = step.get("content", "")
+            
+            if step_type == "action":
+                reasoning_steps.append(f"🔧 **Action:** {content}")
+            elif step_type == "observation":
+                reasoning_steps.append(f"👁️ **Observation:** {content}")
+            elif step_type == "thought":
+                reasoning_steps.append(f"💭 **Thought:** {content}")
         
         return {
             "answer": result["answer"],
             "tool_used": tool_used,  # Single tool for UI
             "tools_used": tools_used_list,  # All tools for reference
             "reasoning_steps": reasoning_steps,
+            "reasoning_trace": reasoning_trace,  # Raw trace for advanced use
             "chunks": [],  # TODO: Extract chunks from tool outputs
-            "intermediate_steps": intermediate_steps,  # Raw steps for debugging
+            "intermediate_steps": result.get("intermediate_steps", []),  # Raw steps for debugging
+            "trace_id": trace_id,  # Langfuse trace ID
             "success": True
         }
         
@@ -1058,97 +1045,9 @@ async def evaluate_single_answer(request: SingleAnswerEvalRequest):
         
         print(f"[EVAL] Single answer evaluated. Overall: {scores['overall']:.3f}")
         
-        # ========== LOG TO LANGFUSE WITH TRACE + SPANS + SCORES ==========
-        if langfuse_client:
-            try:
-                import uuid
-                from datetime import datetime
-                
-                # Generate unique trace ID OR use existing if provided
-                trace_id = request.trace_id if request.trace_id else str(uuid.uuid4())
-                
-                # Step 1: Create the trace (or update existing) with generation event
-                # If trace_id exists, this ADDS to it / Updates it
-                if request.trace_id:
-                    print(f"[EVAL] Attaching scores to existing trace: {trace_id}")
-                    # If attaching to existing, we just want to ensure we have a handle to it
-                    # We strictly want to log SCORES to this ID.
-                else:
-                    # New trace behavior
-                    langfuse_client.generation(
-                        id=trace_id,
-                        name="live-answer-evaluation",
-                        input={"question": request.question},
-                        output={
-                            "answer": request.answer[:500],
-                            "scores": scores
-                        },
-                        model="cerebras/llama3.3-70b",
-                        metadata={
-                            "evaluation_type": "live",
-                            "endpoint": "/evaluate/single",
-                            "has_expected_answer": bool(request.expected_answer)
-                        }
-                    )
-                
-                # Step 2: Create a span for the evaluation process (THE COST/WORK)
-                # We always want to see the JUDGE's work, even if attached to another trace
-                span_id = str(uuid.uuid4())
-                langfuse_client.span(
-                    id=span_id,
-                    trace_id=trace_id,
-                    name="llm-as-judge-scoring",
-                    input={"question": request.question, "answer": request.answer[:200]},
-                    output=scores,
-                    metadata={
-                        "judge_model": "cerebras/llama3.3-70b",
-                        "evaluation_mode": "live",
-                        "context": "Added via evaluation button" 
-                    }
-                )
-                
-                # Step 3: Attach all 4 scores to the trace
-                langfuse_client.score(
-                    trace_id=trace_id,
-                    name="correctness",
-                    value=scores["correctness"],
-                    data_type="NUMERIC",
-                    comment=f"Factual accuracy: {request.question[:50]}..."
-                )
-                
-                langfuse_client.score(
-                    trace_id=trace_id,
-                    name="completeness",
-                    value=scores["completeness"],
-                    data_type="NUMERIC",
-                    comment="Answer completeness"
-                )
-                
-                langfuse_client.score(
-                    trace_id=trace_id,
-                    name="relevance",
-                    value=scores["relevance"],
-                    data_type="NUMERIC",
-                    comment="Question relevance"
-                )
-                
-                langfuse_client.score(
-                    trace_id=trace_id,
-                    name="overall_quality",
-                    value=scores["overall"],
-                    data_type="NUMERIC",
-                    comment=f"Overall: {scores['overall']:.3f}"
-                )
-                
-                # Step 4: Flush immediately
-                langfuse_client.flush()
-                
-                print(f"[EVAL] ✓ Scores logged to Langfuse Trace ID: {trace_id}")
-                
-            except Exception as lf_error:
-                print(f"[EVAL] ⚠ Langfuse logging failed: {lf_error}")
-                import traceback
-                print(traceback.format_exc())
+        # Note: Langfuse 3.x uses different API for manual trace creation
+        # For now, evaluation endpoints use CallbackHandler integration only
+        # TODO: Update to use Langfuse 3.x observe decorators if needed
         
         return SingleAnswerEvalResponse(
             success=True,

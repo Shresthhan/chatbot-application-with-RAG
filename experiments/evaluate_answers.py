@@ -8,9 +8,13 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Langfuse temporarily disabled - package version incompatibility
-Langfuse = None
-LANGFUSE_AVAILABLE = False
+# Try to import Langfuse for evaluation
+try:
+    from langfuse import Langfuse
+    LANGFUSE_AVAILABLE = True
+except ImportError:
+    Langfuse = None
+    LANGFUSE_AVAILABLE = False
 
 import uuid
 

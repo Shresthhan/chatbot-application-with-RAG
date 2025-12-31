@@ -16,9 +16,15 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.messages import HumanMessage
 
-# Langfuse temporarily disabled - package version incompatibility
-CallbackHandler = None
-LANGFUSE_AVAILABLE = False
+# Try to import Langfuse for tracing
+try:
+    from langfuse.langchain import CallbackHandler
+    LANGFUSE_AVAILABLE = True
+    print("✓ Langfuse 3.x LangChain CallbackHandler loaded (query.py)")
+except ImportError:
+    CallbackHandler = None
+    LANGFUSE_AVAILABLE = False
+    print("⚠ Langfuse LangChain integration not available (query.py)")
 
 # Load environment variables FIRST
 load_dotenv()
@@ -94,21 +100,41 @@ def get_llm():
 
 def get_agent_system_prompt():
     """Get the system prompt for agent reasoning"""
-    return """You are a helpful AI assistant with access to tools.
+    return """You are a helpful AI assistant that uses the ReAct (Reasoning + Acting) framework.
+
+Your approach:
+1. Think step-by-step about what you need to do (internal reasoning)
+2. Call the appropriate tool to gather information
+3. Analyze the results
+4. Provide a clean, direct final answer to the user
+
+IMPORTANT - Two types of responses:
+A) WHILE GATHERING INFORMATION: You can think out loud and explain your reasoning
+B) FINAL ANSWER: Provide ONLY the answer - no reasoning, no tool descriptions, just the helpful response
+
+When using tools:
+- Choose the most appropriate tool based on the question
+- You may explain which tool you're calling and why
+- After receiving results, analyze them internally
+
+When providing your FINAL answer:
+- Give a clear, direct response to the user's question
+- Do NOT say "I used tool X" or "Based on the search results"
+- Do NOT explain your reasoning process
+- Format as a natural, helpful answer
+- Be comprehensive but concise
 
 CRITICAL STOPPING RULES:
-1. After calling a tool and receiving results, you MUST immediately provide your final answer
-2. DO NOT call multiple tools unless the first tool explicitly returns no results or an error
-3. DO NOT call the same tool more than once
-4. When you have ANY relevant information from a tool, use it to answer and STOP
-5. If a tool returns information (even if partial), provide your best answer based on that information
+1. After calling ONE tool and receiving results, you should typically have enough information
+2. Provide your final answer immediately if the tool returned relevant information
+3. Only call another tool if:
+   - The first tool returned no results or an error
+   - The first tool explicitly said the information is not available
+   - You need information from a completely different source
+4. DO NOT call the same tool multiple times
+5. Maximum 5 tool calls per query - then provide your best answer with available information
 
-Your job is to: 
-- Call the most relevant tool for the query
-- Evaluate if the results answer the question
-- Provide a final answer immediately
-
-Remember: After ONE successful tool call with results, you MUST provide your final answer. Do not make additional tool calls."""
+Remember: Your reasoning is for planning. Your answer is for the user."""
 
 # 3. CREATE RAG CHAIN
 def create_rag_chain(vectordb, llm, k=3):

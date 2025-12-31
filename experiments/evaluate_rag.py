@@ -7,9 +7,13 @@ from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
-# Langfuse temporarily disabled - package version incompatibility
-Langfuse = None
-LANGFUSE_AVAILABLE = False
+# Try to import Langfuse for evaluation
+try:
+    from langfuse import Langfuse
+    LANGFUSE_AVAILABLE = True
+except ImportError:
+    Langfuse = None
+    LANGFUSE_AVAILABLE = False
 
 load_dotenv()
 

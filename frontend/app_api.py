@@ -1009,8 +1009,8 @@ try:
                 # Show reasoning steps for LangGraph agent responses
                 if message.get("reasoning_steps"):
                     with st.expander("🤔 Agent Reasoning", expanded=False):
-                        for i, step in enumerate(message["reasoning_steps"], 1):
-                            st.markdown(f"**{i}.** {step}")
+                        for step in message["reasoning_steps"]:
+                            st.markdown(step)
                 
                 # Show tool used for LangGraph agent responses
                 if message.get("tool_used"):
@@ -1143,8 +1143,8 @@ try:
                             # Show agent reasoning
                             if reasoning_steps:
                                 with st.expander("🤔 Agent Reasoning", expanded=True):
-                                    for i, step in enumerate(reasoning_steps, 1):
-                                        st.markdown(f"**{i}.** {step}")
+                                    for step in reasoning_steps:
+                                        st.markdown(step)
                             
                             # Show tool used
                             if tool_used != "unknown":

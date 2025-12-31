@@ -15,6 +15,16 @@ from backend.query import get_llm, get_agent_system_prompt
 from backend.tools import get_all_tools
 import json
 
+# Try to import Langfuse for tracing
+try:
+    from langfuse.langchain import CallbackHandler
+    LANGFUSE_AVAILABLE = True
+    print("✓ Langfuse 3.x LangChain CallbackHandler loaded")
+except ImportError:
+    CallbackHandler = None
+    LANGFUSE_AVAILABLE = False
+    print("⚠ Langfuse LangChain integration not available")
+
 
 # ============================================================================
 # AGENT STATE DEFINITION
@@ -98,27 +108,57 @@ class LangGraphReActAgent:
     def _agent_node(self, state: AgentState) -> AgentState:
         """
         Agent reasoning node: Decides what action to take next.
-        This is where the LLM analyzes the query and decides which tool to call.
+        The LLM with tools bound will either:
+        1. Call a tool (if it needs more information)
+        2. Provide a final answer (if it has enough information)
         """
         messages = state["messages"]
         intermediate_steps = state.get("intermediate_steps", [])
+        tool_history = state.get("tool_call_history", [])
         
-        # Check if we've hit the tool limit and need to force a final answer
+        # SAFETY: If limit reached, force final answer (no tool binding)
         if len(intermediate_steps) >= 5:
-            # Add a message instructing the agent to provide final answer
-            force_answer_msg = HumanMessage(
-                content="You have used 5 tools. Based on the information gathered, provide your final answer now. Do NOT call any more tools."
+            force_msg = HumanMessage(
+                content="""You have used the maximum number of tools (5). Now provide ONLY your final answer to the user's original question.
+
+IMPORTANT: 
+- Do NOT explain what tools you used
+- Do NOT describe your reasoning process  
+- ONLY provide the clear, direct answer to the question
+- Format it as a complete, helpful response"""
             )
-            messages = list(messages) + [force_answer_msg]
-            
-            # Invoke LLM WITHOUT tool binding to force text response
-            response = self.llm.invoke(messages)
-            print("[AGENT] Forced final answer generation (no more tool calls allowed)")
-        else:
-            # Normal operation: Invoke LLM with tool binding
-            response = self.llm_with_tools.invoke(messages)
+            messages = list(messages) + [force_msg]
+            response = self.llm.invoke(messages)  # No tool binding
+            print("[AGENT] Forced final answer - limit reached (5 tools)")
+            return {"messages": [response]}
         
-        # Return updated state
+        # SAFETY: If repeated tool detected, force final answer
+        if len(tool_history) > len(set(tool_history)):
+            force_msg = HumanMessage(
+                content="""You've already used this tool. Based on the results you have, provide ONLY your final answer to the user's question.
+
+IMPORTANT:
+- Do NOT explain your reasoning
+- ONLY provide the clear, direct answer
+- Format it as a complete, helpful response"""
+            )
+            messages = list(messages) + [force_msg]
+            response = self.llm.invoke(messages)  # No tool binding
+            print("[AGENT] Forced final answer - repeated tool detected")
+            return {"messages": [response]}
+        
+        # Normal operation: Invoke LLM with tool binding
+        response = self.llm_with_tools.invoke(messages)
+        
+        # Log if response has content (reasoning)
+        if hasattr(response, 'content') and response.content:
+            print(f"[AGENT THOUGHT] {response.content[:200]}...")
+        
+        # Log if response has tool calls
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            for tc in response.tool_calls:
+                print(f"[AGENT ACTION] Calling {tc.get('name')}...")
+        
         return {"messages": [response]}
     
     def _action_node(self, state: AgentState) -> AgentState:
@@ -167,54 +207,55 @@ class LangGraphReActAgent:
     def _should_continue(self, state: AgentState) -> str:
         """
         Routing function: Decides whether to continue with more actions or end.
+        This enforces stopping conditions at the routing level.
         
         Returns:
-            "continue": Agent wants to call more tools
-            "end": Agent has sufficient information to answer
+            "continue": Agent wants to call tools (and limits not exceeded)
+            "end": Agent provided answer OR limits reached
         """
         messages = state["messages"]
         last_message = messages[-1]
+        intermediate_steps = state.get("intermediate_steps", [])
+        tool_history = state.get("tool_call_history", [])
         
         # Check if the last message has tool calls
         has_tool_calls = hasattr(last_message, "tool_calls") and last_message.tool_calls
         
-        # HARD STOP 1: Check step limit (max 5 tool calls)
-        # But only stop if we're NOT about to execute a tool (i.e., we're at reasoning stage)
-        intermediate_steps = state.get("intermediate_steps", [])
-        if len(intermediate_steps) >= 5 and not has_tool_calls:
-            print("[STOP CONDITION] Maximum 5 tool calls reached. Agent must provide final answer.")
+        # STOP CONDITION 1: No tool calls = agent provided final answer
+        if not has_tool_calls:
+            print("[ROUTING] No tool calls - agent provided final answer - ending")
             return "end"
         
-        # HARD STOP 2: Check for repeated tool calls
-        tool_history = state.get("tool_call_history", [])
-        if len(tool_history) > len(set(tool_history)) and not has_tool_calls:
-            print("[STOP CONDITION] Repeated tool call detected. Agent must provide final answer.")
+        # STOP CONDITION 2: Maximum tool calls reached (max 5)
+        if len(intermediate_steps) >= 5:
+            print("[ROUTING] Maximum tool calls (5) reached - will force answer on next agent cycle")
             return "end"
         
-        # If the last message has tool calls, continue to action
-        if has_tool_calls:
-            # But check if we're about to exceed the limit
-            if len(intermediate_steps) >= 5:
-                print("[STOP CONDITION] Tool call requested but limit reached. Blocking tool execution.")
-                return "end"
-            return "continue"
+        # STOP CONDITION 3: Repeated tool calls detected
+        if len(tool_history) > len(set(tool_history)):
+            print("[ROUTING] Repeated tool call detected - will force answer on next agent cycle")
+            return "end"
         
-        # Otherwise, we're done (agent provided final answer)
-        return "end"
+        # All checks passed - continue to action node
+        print(f"[ROUTING] Agent wants to call tool - continuing to action node")
+        return "continue"
     
-    def invoke(self, query: str, max_iterations: int = 5) -> dict:
+    def invoke(self, query: str, max_iterations: int = 5, langfuse_handler=None) -> dict:
         """
-        Run the agent on a query.
+        Run the agent on a query with optional Langfuse tracing.
         
         Args:
             query: User's question
             max_iterations: Maximum reasoning-action loops (prevents infinite loops)
+            langfuse_handler: Optional Langfuse callback handler for tracing
         
         Returns:
             Dictionary with answer and execution trace
         """
         print(f"\n{'='*80}")
         print(f"[AGENT] Processing query: {query}")
+        if langfuse_handler:
+            print(f"[AGENT] Langfuse tracing enabled")
         print(f"{'='*80}\n")
         
         # Get system prompt
@@ -232,22 +273,36 @@ class LangGraphReActAgent:
         
         # Run the graph
         try:
-            final_state = self.graph.invoke(
-                initial_state,
-                {"recursion_limit": 25}  # Increased from 5 to 25
-            )
+            # Build config with Langfuse callback if provided
+            config = {"recursion_limit": 25}
+            if langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+            
+            final_state = self.graph.invoke(initial_state, config)
             
             # Extract final answer
             messages = final_state["messages"]
             final_message = messages[-1]
             
             # Get the answer (last AI message without tool calls)
+            # This is the clean final answer, not the reasoning
             answer = final_message.content
+            
+            # If answer is empty or None, try to find last non-empty AI response
+            if not answer or not answer.strip():
+                for msg in reversed(messages):
+                    if isinstance(msg, AIMessage) and msg.content and msg.content.strip():
+                        answer = msg.content
+                        break
             
             # Extract intermediate steps for transparency
             steps = final_state.get("intermediate_steps", [])
             
             print(f"\n[AGENT] ✓ Completed with {len(steps)} tool calls\n")
+            print(f"[AGENT] Final answer preview: {answer[:200] if answer else 'No answer'}...")
+            
+            # Build detailed reasoning trace from messages
+            reasoning_trace = self._extract_reasoning_trace(messages)
             
             # Serialize messages for response
             serialized_messages = []
@@ -266,7 +321,8 @@ class LangGraphReActAgent:
                 "answer": answer,
                 "intermediate_steps": steps,
                 "messages": serialized_messages,
-                "tools_used": [step["tool"] for step in steps]
+                "tools_used": [step["tool"] for step in steps],
+                "reasoning_trace": reasoning_trace
             }
             
         except Exception as e:
@@ -276,8 +332,96 @@ class LangGraphReActAgent:
                 "intermediate_steps": [],
                 "messages": [],
                 "tools_used": [],
+                "reasoning_trace": [],
                 "error": str(e)
             }
+    
+    def _extract_reasoning_trace(self, messages: list) -> list:
+        """
+        Extract detailed reasoning trace from message history.
+        
+        Returns list of dicts with:
+        - type: 'thought' | 'action' | 'observation'
+        - content: The actual content
+        - tool_name: (for actions only)
+        - tool_args: (for actions only)
+        """
+        trace = []
+        
+        for i, msg in enumerate(messages):
+            # Skip system messages
+            if isinstance(msg, SystemMessage):
+                continue
+            
+            # Skip the initial user query
+            if isinstance(msg, HumanMessage) and i <= 1:
+                continue
+            
+            # Skip our internal reasoning prompts
+            if isinstance(msg, HumanMessage) and ("Before taking action" in msg.content or 
+                                                   "Good. Now call the appropriate tool" in msg.content or
+                                                   "Based on the tool results" in msg.content):
+                continue
+            
+            # AI messages with reasoning
+            if isinstance(msg, AIMessage):
+                # Check if this message has tool calls
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    # If there's text content, that's the thought/reasoning
+                    if msg.content and msg.content.strip():
+                        trace.append({
+                            "type": "thought",
+                            "content": msg.content
+                        })
+                    
+                    # Add each tool call as an action
+                    for tool_call in msg.tool_calls:
+                        tool_name = tool_call.get("name", "unknown")
+                        tool_args = tool_call.get("args", {})
+                        
+                        # Format the action with detail
+                        action_text = f"**Calling Tool:** `{tool_name}`"
+                        if tool_args:
+                            if 'query' in tool_args:
+                                action_text += f"\n**Search Query:** \"{tool_args['query']}\""
+                            if 'k' in tool_args:
+                                action_text += f"\n**Documents to retrieve:** {tool_args['k']}"
+                            # Add any other args
+                            for k, v in tool_args.items():
+                                if k not in ['query', 'k']:
+                                    action_text += f"\n**{k}:** {v}"
+                        
+                        trace.append({
+                            "type": "action",
+                            "content": action_text,
+                            "tool_name": tool_name,
+                            "tool_args": tool_args
+                        })
+                else:
+                    # Final answer or intermediate reasoning without tool calls
+                    if msg.content and msg.content.strip():
+                        trace.append({
+                            "type": "thought",
+                            "content": msg.content
+                        })
+            
+            # Tool messages (observations)
+            elif isinstance(msg, ToolMessage):
+                # Truncate long observations for readability
+                content = msg.content
+                original_length = len(content)
+                
+                if len(content) > 800:
+                    content = content[:800] + f"\n\n... _(truncated {original_length - 800} characters)_"
+                
+                trace.append({
+                    "type": "observation",
+                    "content": content
+                })
+        
+        return trace
+        
+        return trace
     
     async def astream(self, query: str, max_iterations: int = 5):
         """
