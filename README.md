@@ -1,42 +1,50 @@
-# chatbot-application-implementing-RAG 🤖
+# chatbot-application-implementing-RAG
 
-A powerful Retrieval-Augmented Generation (RAG) chatbot with **multi-collection support**, allowing you to organize and query different document sets independently.
+A powerful Retrieval-Augmented Generation (RAG) chatbot with **intelligent agent architecture**, multi-collection support, and web search capabilities for comprehensive question answering.
 
-## ✨ Key Features
+## Key Features
 
+- **Intelligent ReAct Agent** - LangGraph-based agent with reasoning and tool selection
 - **Multi-Collection Support** - Create unlimited collections for different topics/projects
+- **Web Search Integration** - Tavily-powered web search for current information
+- **Smart Tool Selection** - Agent automatically chooses between collections and web search
 - **Intelligent Retrieval** - Semantic search using HuggingFace embeddings
-- **Natural Conversations** - Powered by Google Gemini 2.5-Flash
-- **Source Tracking** - View the exact chunks used to generate answers
+- **Natural Conversations** - Powered by Cerebras GPT-OSS-120B
+- **Reasoning Visibility** - See agent's thought process and tool usage
+- **Source Tracking** - View exact chunks and sources used
+- **Langfuse Tracing** - Full observability and performance monitoring
 - **Modern UI** - Clean Streamlit interface with collection management
 - **FastAPI Backend** - RESTful API architecture for scalability
 - **Semantic Chunking** - Context-aware document splitting
-- **Persistent Storage** - ChromaDB vector database
+- **Dual Storage** - ChromaDB + Qdrant for flexible querying
 
-## 🆕 What's New in v2.0
+## What's New in v3.0
 
-### Multi-Collection Architecture
-- **Create separate collections** for different document sets
-- **Independent context** per collection (no cross-contamination)
-- **Easy switching** between collections via dropdown
-- **Collection management** - create, query, list, delete
+### LangGraph ReAct Agent
+- **Autonomous reasoning** - Agent thinks step-by-step before acting
+- **Multi-tool coordination** - Intelligently uses multiple tools if needed
+- **Dynamic tool selection** - Chooses appropriate tool based on query
+- **Reasoning trace** - View agent's thought process in UI:
+  - **Action:** What tool the agent is calling
+  - **Observation:** Results from tool execution
+  - **Thought:** Agent's reasoning and conclusions
 
-### Enhanced UI
-- Collection selector in sidebar
-- Collection info display (chunk counts)
-- Collection-aware ingestion
-- Visual feedback for active collection
+### Web Search Capability
+- **Tavily integration** - High-quality web search optimized for LLM
+- **Current information** - Access up-to-date information beyond your documents
 
-### Improved API
-- Collection-based endpoints
-- List all collections with statistics
-- Collection-specific querying
-- Selective collection deletion
-- **Background ingestion** with job tracking
-- Chunking strategy selector (semantic/fixed)
-- Real-time ingestion status updates
+### Enhanced Architecture
+- **Qdrant vector database** - Dedicated agent knowledge base
+- **Tool-based architecture** - Dynamic tool generation per collection
+- **ReAct framework** - Reasoning + Acting for better decision making
+- **Stopping conditions** - Smart limits prevent infinite loops
 
-## 🚀 Quick Start
+### Langfuse Observability
+- **Full tracing** - Track every agent decision and LLM call
+- **Performance metrics** - Token usage, latency, cost tracking
+- **Debugging tools** - Understand agent behavior and optimize prompts
+
+## Quick Start
 
 ### Prerequisites
 - Python 3.12+
@@ -64,10 +72,24 @@ pip install -r requirements.txt
 ```
 
 4. Set up environment variables:
-Create a `.env` file with your Google API key:
+Create a `.env` file with your API keys:
+```env
+# LLM API Key (Cerebras)
+CEREBRAS_API_KEY=your_cerebras_key_here
+
+# Web Search API Key (Tavily)
+TAVILY_API_KEY=your_tavily_key_here
+
+# Optional: Langfuse for tracing (local or cloud)
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=http://localhost:3000
 ```
-GOOGLE_API_KEY=your_api_key_here
-```
+
+**Getting API Keys:**
+- **Cerebras**: Sign up at https://cerebras.ai/ for fast inference
+- **Tavily**: Get free API key at https://tavily.com/
+- **Langfuse**: Run locally with Docker or use cloud at https://langfuse.com/
 
 ### Running the Application
 
@@ -90,32 +112,65 @@ streamlit run frontend\app_api.py
 ```
 UI will open at http://localhost:8501
 
-**Legacy App (without API):**
-```bash
-streamlit run app\app.py
-```
+
+**Two query modes:**
+
+1. **Agent Mode (Recommended)** - Intelligent multi-tool agent
+   - Automatically searches collections OR web as needed
+   - Shows reasoning process
+   - Coordinates multiple tools if required
+   - Best for complex queries
+
+2. **Direct RAG** - Simple collection search
+   - Select specific collection from dropdown
+   - Direct semantic search
+   - Faster for simple lookups
+
+**Using the Agent:**
+1. Switch to **Agent Chat** tab
+2. Ask any question - agent decides which tool to use
+3. Watch the reasoning process in expandable section
+4. View sources and get comprehensive answers
 
 #### Step 3: Create Collections & Upload Documents
 1. Go to **Ingestion** tab
 2. Enter a collection name (e.g., "research_papers")
-3. Choose chunking strategy (Semantic or Fixed-size)
-4. Upload PDF file
-5. Click **Ingest Document**
-6. Ingestion runs in background - track status in UI
-7. Wait 2-5 minutes for processing to complete
-
-#### Step 4: Query Your Documents
-1. Select collection from dropdown
-2. Ask questions in the chat
-3. Get answers with source chunks!
-
-## 📁 Project Structure
-
-```
-chatbot-application-with-RAG/
-├── backend/              # FastAPI backend
-│   ├── api.py           # FastAPI endpoints & RAG system
+3. Choose chunking strategy (Semantic or Fix
 │   ├── database.py      # SQLAlchemy models for job tracking
+│   ├── ingest.py        # Document ingestion logic
+│   ├── query.py         # RAG query logic & LLM setup
+│   ├── agent.py         # Legacy agent implementation
+│   ├── langgraph_agent.py  # LangGraph ReAct agent
+│   ├── tools.py         # Dynamic tool generation
+│   └── collection_manager.py  # Collection management
+├── frontend/            # Streamlit UI (API-based)
+│   └── app_api.py       # Main Streamlit app with agent support
+├── experiments/         # Evaluation & testing
+│   ├── evaluate_rag.py  # RAG evaluation
+│   └── evaluate_answers.py  # Answer quality evaluation
+├── app/                 # Legacy standalone app
+│   └── app.py           # Streamlit app without API
+├── data/                # PDF documents
+├── Vector_DB/           # ChromaDB storage (gitignored)
+├── Qdrant_DB/           # Qdrant storage for agent (gitignored)
+├── .venv/               # Virtual environment (gitignored)
+
+### System Architecture (Traditional RAG)
+<img src="images/chat-RAG-mermaid-diagram.png" width="500">
+
+### Agent Architecture (LangGraph ReAct)
+<!-- TODO: Add agent architecture diagram -->
+<img src="images/agent-architecture.png" width="800">
+
+### User Interface Screenshots
+<!-- TODO: Update with agent UI screenshots -->
+<img src="images/UI.png" width="500">
+
+### Agent Reasoning Display
+<!-- TODO: Add screenshot showing agent reasoning process -->
+<img src="images/agent-reasoning.png" width="500">
+
+### Ingestion Interfacease.py      # SQLAlchemy models for job tracking
 │   ├── ingest.py        # Document ingestion logic
 │   └── query.py         # RAG query logic
 ├── frontend/            # Streamlit UI (API-based)
@@ -134,10 +189,13 @@ chatbot-application-with-RAG/
 
 ## Architecture
 ### System Architecture
-<img src="images/chat-RAG-mermaid-diagram.png" width="500">
-
-![System Architecture]()
-
+<imgAgent Framework** | LangGraph (ReAct pattern) |
+| **LLM** | Cerebras GPT-OSS-120B |
+| **Embeddings** | HuggingFace (all-mpnet-base-v2) |
+| **Vector DB** | ChromaDB + Qdrant |
+| **Web Search** | Tavily API |
+| **Chunking** | SemanticChunker + RecursiveCharacterTextSplitter |
+| **Observability** | Langfuse 3.x
 ### User Interface 
 <img src="images/UI.png" width="500">
 
@@ -166,33 +224,43 @@ chatbot-application-with-RAG/
 - Collection: "bio_papers" - Biology research
 
 ### Project Documentation
-- Collection: "project_alpha" - Alpha project docs
-- Collection: "project_beta" - Beta project docs
-- Collection: "project_gamma" - Gamma project docs
+- CoAgent Endpoints
 
-### Multi-Domain Knowledge Base
-- Collection: "technical_docs" - Technical documentation
-- Collection: "business_docs" - Business documents
-- Collection: "legal_docs" - Legal documents
+#### POST /langgraph_agent_query
+Query the intelligent agent (recommended)
+```json
+{
+  "question": "What is the accuracy of TechBot?",
+  "k": 5
+}
+```
+Response includes:
+- `answer`: Final agent response
+- `reasoning_steps`: Array of agent's reasoning process
+- `tools_used`: List of tools the agent called
+- `trace_id`: Langfuse trace ID for debugging
 
-## 🔌 API Endpoints
+### Traditional RAG Endpoints
 
-### GET /health
+#### GET /health
 Check API health and database status
 
-### GET /collections
+#### GET /collections
 List all collections with chunk counts
 
-### POST /query
-Query a specific collection
+#### POST /query
+Query a specific collection (traditional RAG)
 ```json
 {
   "question": "What is a transformer?",
-  "collection_name": "research_papers"
+  "collection_name": "research_papers",
+  "k": 3
 }
 ```
 
-### POST /ingest
+### Ingestion Endpoints
+
+#### POST /ingest
 Ingest PDF to collection (background processing)
 ```
 Form Data:
@@ -202,9 +270,108 @@ Form Data:
 Returns: {"ingestion_id": "uuid", "message": "..."}
 ```
 
-### GET /status/{ingestion_id}
+#### GET /status/{ingestion_id}
 Check ingestion job status
 ```json
+Response: {
+  "status": "PROCESSING",
+  "progress": 45.5,
+  "message": "Processing document..."
+}
+```
+- **Agent Chat** - Intelligent agent with reasoning display
+- **Collection Chat** - Traditional RAG with collection selector
+- **Reasoning Visibility** - Expandable agent thought process
+- **Tool Usage Display** - See which tools agent used
+- **Multi-Session Chat** - Multiple independent conversations
+- **Source Chunks** - Expandable view of retrieved context
+- **Document Upload** - Drag-and-drop PDF ingestion
+- **Collection Info** - Display chunk counts per collection
+- **Session Management** - Create, switch, delete chat sessions
+
+
+#### Agent Not Responding
+- **Issue**: Agent query times out or fails
+- **Solution**: 
+  - Check Cerebras API key is valid
+  - Verify backend logs for errors
+  - Ensure collections have ingested data
+  - Restart backend if needed
+
+#### Agent Uses Wrong Tool
+- **Issue**: Agent searches web when answer is in collections
+- **Solution**: 
+  - This is normal - agent makes autonomous decisions
+  - Agent may use web for verification or additional context
+  - Check if collection description is clear and informative
+  - Verify collection actually contains relevant information
+
+#### Reasoning Steps Not Showing
+- **Issue**: Agent answer appears but no reasoning visible
+- **Solution**:
+  - Expand "Agent Reasoning" section in UI
+  - Check that agent completed successfully (not errored)
+  - Verify backend is returning `reasoning_steps` in response
+
+### API Issues
+
+#### API Not Responding
+- **Issue**: Streamlit shows connection errors
+- **Solution**: Ensure FastAPI is running on http://localhost:8000
+- **Check**: Run `curl http://localhost:8000/health` or visit in browser
+
+#### Web Search Fails
+- **Issue**: Agent errors when trying web search
+- **Solution**:
+  - Verify Tavily API key in `.env` file
+  - Check API key has remaining credits
+  - Test: `curl https://api.tavily.com/search` with your key
+
+#### Langfuse Not Tracking
+- **Issue**: No traces appearing in Langfuse
+- **Solution**:
+  - Check Langfuse server is running (if local)
+  - Verify LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in `.env`
+  - Check backend logs for Langfuse connection errors
+  - Traces are optional - agent works without them
+
+### Ingestion Issues
+
+#### Collection Name Validation Error
+- **Issue**: "Invalid collection name" error
+- **Solution**: Use only alphanumeric characters, dots, underscores, hyphens
+- **Valid**: `research_papers`, `my-docs`, `collection.v1`
+- **Invalid**: `my docs` (space), `report ` (trailing space)
+
+#### Ingestion Fails with 500 Error
+- **Issue**: Ingestion returns server error
+- **Solution**: 
+  - Check API logs for detailed error
+  - Ensure PDF is valid and not corrupted
+  - Verify collection name is properly formatted
+  - Restart API if needed
+
+### Database Issues
+
+#### Empty Collections Appearing
+- **Issue**: Default collection shows with 0 chunks
+- **Solution**: This is fixed in latest version - only collections with documents are loaded
+
+#- No hardcoded priority - intelligent decision making
+- Can use multiple tools if needed for comprehensive answer
+#### POST /collections/create
+Create a new collection
+```json
+{
+  "collection_name": "my_docs",
+  "description": "My document collection"
+}
+```
+
+#### GET /collections/list
+List all available collections with metadata
+
+#```json
 Response: {
   "status": "PROCESSING",
   "progress": 45.5,
@@ -272,10 +439,10 @@ Collection names must:
 - **No spaces or trailing whitespace**
 
 Examples:
-- ✅ `research_papers_2024` 
-- ✅ `my-collection.v2` 
-- ✅ `project_alpha` 
-- ❌ `my collection` (space) 
-- ❌ `report ` (trailing space) 
-- ❌ `ab` (too short)
+- Valid: `research_papers_2024` 
+- Valid: `my-collection.v2` 
+- Valid: `project_alpha` 
+- Invalid: `my collection` (space) 
+- Invalid: `report ` (trailing space) 
+- Invalid: `ab` (too short)
 

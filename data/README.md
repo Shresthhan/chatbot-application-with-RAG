@@ -6,7 +6,7 @@ This folder is **optional** and only used for **manual CLI-based ingestion**.
 
 ## Usage Scenarios
 
-### 1. UI-Based Ingestion (Recommended) ✅
+### 1. UI-Based Ingestion (Recommended)
 - Use the Streamlit app's **Ingestion tab**
 - Upload PDFs directly through the drag-and-drop interface
 - No need for this folder at all
