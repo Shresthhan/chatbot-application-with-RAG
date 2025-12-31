@@ -135,7 +135,16 @@ UI will open at http://localhost:8501
 #### Step 3: Create Collections & Upload Documents
 1. Go to **Ingestion** tab
 2. Enter a collection name (e.g., "research_papers")
-3. Choose chunking strategy (Semantic or Fix
+3. Choose chunking strategy (Semantic or Fixed)
+4. Upload PDF document
+5. Wait for ingestion to complete
+
+## Project Structure
+
+```
+chatbot-application-with-RAG/
+├── backend/             # FastAPI backend
+│   ├── api.py           # FastAPI routes
 │   ├── database.py      # SQLAlchemy models for job tracking
 │   ├── ingest.py        # Document ingestion logic
 │   ├── query.py         # RAG query logic & LLM setup
@@ -154,6 +163,14 @@ UI will open at http://localhost:8501
 ├── Vector_DB/           # ChromaDB storage (gitignored)
 ├── Qdrant_DB/           # Qdrant storage for agent (gitignored)
 ├── .venv/               # Virtual environment (gitignored)
+├── requirements.txt     # Python dependencies
+├── .env                 # Environment variables (gitignored)
+├── start_backend.bat    # Quick start script for API
+├── start_frontend.bat   # Quick start script for UI
+└── README.md            # This file
+```
+
+## Architecture
 
 ### System Architecture (Traditional RAG)
 <img src="images/chat-RAG-mermaid-diagram.png" width="500">
@@ -170,50 +187,22 @@ UI will open at http://localhost:8501
 <!-- TODO: Add screenshot showing agent reasoning process -->
 <img src="images/agent-reasoning.png" width="500">
 
-### Ingestion Interfacease.py      # SQLAlchemy models for job tracking
-│   ├── ingest.py        # Document ingestion logic
-│   └── query.py         # RAG query logic
-├── frontend/            # Streamlit UI (API-based)
-│   └── app_api.py       # Main Streamlit app with API calls
-├── app/                 # Legacy standalone app
-│   └── app.py           # Streamlit app without API
-├── data/                # PDF documents (if any)
-├── Vector_DB/           # ChromaDB storage (gitignored)
-├── .venv/               # Virtual environment (gitignored)
-├── requirements.txt     # Python dependencies
-├── .env                 # Environment variables (gitignored)
-├── start_backend.bat    # Quick start script for API
-├── start_frontend.bat   # Quick start script for UI
-└── README.md            # This file
-```
+### Ingestion Interface
+<img src="images/Ingestion.png" width="200">
 
-## Architecture
-### System Architecture
-<imgAgent Framework** | LangGraph (ReAct pattern) |
+## Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| **Frontend** | Streamlit |
+| **Backend** | FastAPI |
+| **Agent Framework** | LangGraph (ReAct pattern) |
 | **LLM** | Cerebras GPT-OSS-120B |
 | **Embeddings** | HuggingFace (all-mpnet-base-v2) |
 | **Vector DB** | ChromaDB + Qdrant |
 | **Web Search** | Tavily API |
 | **Chunking** | SemanticChunker + RecursiveCharacterTextSplitter |
-| **Observability** | Langfuse 3.x
-### User Interface 
-<img src="images/UI.png" width="500">
-
-### Ingestion
-<img src="images/Ingestion.png" width="200">
-
-
-
-## Technology Stack
-
-| Component | Technology |
-|-----------|-----------|
-| **Frontend** | Streamlit |
-| **Backend** | FastAPI |
-| **LLM** | Google Gemini 2.5-Flash |
-| **Embeddings** | HuggingFace (all-mpnet-base-v2) |
-| **Vector DB** | ChromaDB |
-| **Chunking** | SemanticChunker + RecursiveCharacterTextSplitter |
+| **Observability** | Langfuse 3.x |
 | **Job Tracking** | SQLAlchemy + SQLite |
 
 ## Use Cases
@@ -224,7 +213,16 @@ UI will open at http://localhost:8501
 - Collection: "bio_papers" - Biology research
 
 ### Project Documentation
-- CoAgent Endpoints
+- Collection: "api_docs" - API documentation
+- Collection: "user_guides" - User manuals
+
+### Company Knowledge Base
+- Collection: "hr_policies" - HR policies and procedures
+- Collection: "tech_specs" - Technical specifications
+
+## API Endpoints
+
+### Agent Endpoints
 
 #### POST /langgraph_agent_query
 Query the intelligent agent (recommended)
@@ -279,6 +277,33 @@ Response: {
   "message": "Processing document..."
 }
 ```
+
+### Collection Management Endpoints
+
+#### POST /collections/create
+Create a new collection
+```json
+{
+  "collection_name": "my_docs",
+  "description": "My document collection"
+}
+```
+
+#### GET /collections/list
+List all available collections with metadata
+
+#### GET /ingestions
+List recent ingestion jobs with status
+
+#### DELETE /database
+Delete entire database or specific collection
+```
+Query Parameter:
+- collection_name: "specific_collection" (optional)
+```
+
+## UI Features
+
 - **Agent Chat** - Intelligent agent with reasoning display
 - **Collection Chat** - Traditional RAG with collection selector
 - **Reasoning Visibility** - Expandable agent thought process
@@ -289,6 +314,18 @@ Response: {
 - **Collection Info** - Display chunk counts per collection
 - **Session Management** - Create, switch, delete chat sessions
 
+## Agent Behavior
+
+### How the Agent Works
+- **ReAct Pattern**: Reasoning + Acting cycle
+- **Tool Selection**: Chooses from available collection tools + web search
+- **Autonomous Decisions**: No hardcoded priority - intelligent decision making
+- **Multi-Tool Usage**: Can use multiple tools if needed for comprehensive answer
+- **Reasoning Trace**: Displays thought process, actions, and observations
+
+## Troubleshooting
+
+### Agent Issues
 
 #### Agent Not Responding
 - **Issue**: Agent query times out or fails
@@ -354,72 +391,6 @@ Response: {
 ### Database Issues
 
 #### Empty Collections Appearing
-- **Issue**: Default collection shows with 0 chunks
-- **Solution**: This is fixed in latest version - only collections with documents are loaded
-
-#- No hardcoded priority - intelligent decision making
-- Can use multiple tools if needed for comprehensive answer
-#### POST /collections/create
-Create a new collection
-```json
-{
-  "collection_name": "my_docs",
-  "description": "My document collection"
-}
-```
-
-#### GET /collections/list
-List all available collections with metadata
-
-#```json
-Response: {
-  "status": "PROCESSING",
-  "progress": 45.5,
-  "message": "Processing document..."
-}
-```
-
-### GET /ingestions
-List recent ingestion jobs with status
-
-### DELETE /database
-Delete entire database or specific collection
-```
-Query Parameter:
-- collection_name: "specific_collection" (optional)
-```
-
-## UI Features
-
-- **Collection Selector** - Dropdown to choose active collection
-- **Chat Interface** - Multi-session chat history
-- **Source Chunks** - Expandable view of retrieved context
-- **Document Upload** - Drag-and-drop PDF ingestion
-- **Collection Info** - Display chunk counts per collection
-- **Session Management** - Create, switch, delete chat sessions
-
-## Troubleshooting
-
-### API Not Responding
-- **Issue**: Streamlit shows connection errors
-- **Solution**: Ensure FastAPI is running on http://localhost:8000
-- **Check**: Run `curl http://localhost:8000/health` or visit in browser
-
-### Collection Name Validation Error
-- **Issue**: "Invalid collection name" error
-- **Solution**: Use only alphanumeric characters, dots, underscores, hyphens
-- **Valid**: `research_papers`, `my-docs`, `collection.v1`
-- **Invalid**: `my docs` (space), `report ` (trailing space)
-
-### Ingestion Fails with 500 Error
-- **Issue**: Ingestion returns server error
-- **Solution**: 
-  - Check API logs for detailed error
-  - Ensure PDF is valid and not corrupted
-  - Verify collection name is properly formatted
-  - Restart API if needed
-
-### Empty Collections Appearing
 - **Issue**: Default collection shows with 0 chunks
 - **Solution**: This is fixed in latest version - only collections with documents are loaded
 
