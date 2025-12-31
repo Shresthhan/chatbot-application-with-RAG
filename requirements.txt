@@ -17,7 +17,7 @@ uvicorn
 python-multipart
 requests
 sqlalchemy==2.0.23
-langfuse>=3.0  # For agent tracing and observability (uses modern LangChain integration)
+langfuse>=3.0  
 ragas
 tavily
 httpx
